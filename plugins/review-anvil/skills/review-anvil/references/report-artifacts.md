@@ -77,11 +77,18 @@ Write each inline comment in plain language about the code at that line. Emit
 comments at or above the configured inline threshold; lower-priority findings
 remain in the summary.
 
-Do not add a synthetic title or visible metadata. Use two short human paragraphs
-when requested work exists:
+Do not add a synthetic title or visible metadata.
+Keep the diagnosis as unlabeled prose. Label only the requested work:
 
-1. State what goes wrong and the concrete result.
-2. Start the smallest required change with its action verb.
+```md
+<What goes wrong and the concrete result.>
+
+Suggestions:
+- <One requested change per independently implementable obligation.>
+```
+
+Use one bullet per independently implementable obligation. Prefer separate
+bullets whenever actions remain clear on their own.
 
 Default to starting required work with its action verb. A deliberate
 collaborative request may use a courtesy wrapper sparingly when coordination or
@@ -91,7 +98,7 @@ statement, not a question. Optional low/nit work starts with `Consider …`. Ask
 a real question only when the source leaves a decision unresolved. Do not
 mechanically rotate equivalent request openers.
 
-Use a short list only for three or more independent obligations. End each body
+End each body
 with exactly one
 `<!-- review-anvil: id=<complete-id> severity=<severity> area=<area> -->`.
 The marker remains the final line. Put a safe suggestion fence and the
@@ -189,10 +196,9 @@ Before writing, map every source predicate to author work or a no-change
 boundary. Every author-work predicate must remain an explicit request. Combine
 actions that implement one invariant; do not split values governed by one rule.
 
-Use one short direct-action paragraph for one or two obligations. Start with
-the action verb. Use a real question such as `Should …?` only when the source
-leaves a choice unresolved. Use a short bullet list only for three or more
-independently implementable obligations.
+Put requested work under `Suggestions:`. Use one direct-action bullet per
+independently implementable obligation. Use a real question such as `Should …?`
+only when the source leaves a choice unresolved.
 
 Order required behavior before required tests. Keep suggestion grammar for low
 and nit guidance. Never write `the fix`, `in the fix`, or `the corrected path`
@@ -202,7 +208,7 @@ exists, stop after the consequence. Do not invent why a test exists.
 Write the visible body in this order:
 
 1. One or two short sentences stating the failure and concrete result.
-2. One short direct-action paragraph when author work exists.
+2. `Suggestions:` and one direct-action bullet per obligation.
 3. Optional accepted behavior only when it constrains the request.
 
 After the visible body, append the exact finding-metadata marker as the final
@@ -233,7 +239,9 @@ Use short everyday words. Prefer one clear sentence over a dense explanation.
 This entry point still builds the old argument namespace, so the handler reads
 missing fields and fails before conversion.
 
-Switch it to the shared parser and add one offline test covering the defaults.
+Suggestions:
+- Switch it to the shared parser.
+- Add one offline test covering the defaults.
 
 <!-- review-anvil: id=RAV-RUN2-R1-F003 severity=medium area=cli -->
 ```
@@ -244,8 +252,8 @@ When one change has an accepted boundary, keep it in natural prose:
 Invalid populated cells currently disappear, and invalid denominators fall
 back to 805.
 
-Validate uncertainty, counts, and positive denominators separately while
-keeping empty optional cells allowed.
+Suggestions:
+- Validate uncertainty, counts, and positive denominators separately while keeping empty optional cells allowed.
 
 <!-- review-anvil: id=RAV-RUN3-R1-F002 severity=medium area=input-validation -->
 ```
@@ -258,8 +266,8 @@ Voice rules:
 
 - Address the code, never the author.
 - Keep requested work calm, direct, and conversational.
-- Do not use stock openers, review jargon, field labels, or compliment
-  sandwiches.
+- Do not use stock openers, review jargon, or compliment sandwiches. Use only
+  the `Suggestions:` label.
 - Severity determines placement; prose needs no alarm words or bold warnings.
 - Keep the comment as short as the finding allows.
 - Use a suggestion only for a safe, exact replacement; still explain the

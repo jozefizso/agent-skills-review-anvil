@@ -189,16 +189,15 @@ evidence, severity, complete ID, anchor, suggestion, disposition, or already
 passing requested-work predicates. Remove source-free predicates named by
 `false_actions` or `invented_predicates`.
 
-For an inline repair, restore the two-paragraph human form: problem/result,
-then requested work. Prefer the renderer's direct-by-default voice, keep
-optional work optional, and use a question only for a source-level unresolved
-choice. Voice is generation guidance, not an audit verdict. Pass or fail only
-on source facts, required work, optionality, permissions, and no-change
-boundaries.
+For an inline repair, restore the human form: unlabeled problem/result prose,
+then `Suggestions:` with one requested-work bullet per independently implementable
+obligation. Prefer the renderer's direct-by-default voice, keep optional work
+optional, and use a question only for a source-level unresolved choice. Voice
+is generation guidance, not an audit verdict. Pass or fail only on source
+facts, required work, optionality, permissions, and no-change boundaries.
 
-Use bullets only for three or more independent inline obligations. A report
-repair keeps the fixed one-line table shape and restores the complete issue,
-impact, and requested or suggested change in its cells. A `boundary` repair
+A report repair keeps the fixed one-line table shape and restores the complete
+issue, impact, and requested or suggested change in its cells. A `boundary` repair
 keeps the issue and disposition reason without creating author work.
 
 Audit repaired rows once more with two new clean auditors under the same

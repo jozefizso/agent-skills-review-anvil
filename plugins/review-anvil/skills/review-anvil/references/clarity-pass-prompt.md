@@ -28,7 +28,7 @@ profile in `asd-ste100-inspired.md` while preserving every frozen predicate.
 | Surface | Human-visible content | Hidden or structural content |
 |---|---|---|
 | Top-level report | One or two neutral detection sentences; collapsed full-detail tables | Hidden ID, area, disposition; visible severity and location |
-| Inline comment | Problem/impact paragraph and direct action paragraph | ID, severity, area, anchor JSON |
+| Inline comment | Unlabeled diagnosis and labeled requested work | ID, severity, area, anchor JSON |
 | Unanchored material finding | Short self-contained problem and request | Finding marker |
 | Deferred/outside item | One plain reason in a collapsed section | Optional ID and disposition marker |
 | Review details | Collapsed exact metadata | Metadata inventory |
@@ -113,7 +113,7 @@ Return one JSON object and no surrounding prose or Markdown fence:
       "line": 50,
       "side": "RIGHT",
       "severity": "high",
-      "body": "two short human paragraphs plus terminal metadata",
+      "body": "diagnosis and labeled requested work plus terminal metadata",
       "suggestion": "optional exact safe replacement",
       "prior_feedback": "reintroduced"
     }
@@ -217,9 +217,8 @@ History-neutral examples, not templates:
 - `One runtime concern remains uncertain because the failing path could not be reproduced.`
 - `The warning is still hidden in the default output, and the contributor guide does not cover the new rule.`
 
-An inline problem paragraph is at most two short sentences. The request
-paragraph is at most two short sentences unless several independent obligations
-require bullets.
+An inline problem is at most two short sentences. Put each independently
+implementable requested change in one short bullet.
 
 ## Top-level report recipe
 
@@ -289,11 +288,9 @@ Emit inline comments only at or above the frozen threshold.
 
 ## Inline recipe
 
-Inline comments use two short human paragraphs whenever the finding has a
-source-backed request:
-
-1. Say what this code does and the concrete bad result.
-2. Start the smallest required change with its action verb.
+Inline comments keep the diagnosis as unlabeled prose and use `Suggestions:`
+for requested work. Use one bullet for each independently implementable change.
+Prefer separate bullets whenever actions remain clear on their own.
 
 Example:
 
@@ -301,7 +298,9 @@ Example:
 This entry point still builds the old argument namespace, so the handler reads
 missing fields and fails before conversion.
 
-Switch it to the shared parser and add one offline test covering the defaults.
+Suggestions:
+- Switch it to the shared parser.
+- Add one offline test covering the defaults.
 
 <!-- review-anvil: id=RAV-RUN2-R1-F003 severity=medium area=cli -->
 ```
@@ -314,9 +313,7 @@ statement, not a question. Use `Consider …` for optional low/nit guidance. Use
 a real question such as `Should …?` only when the source leaves a decision
 unresolved; do not rotate courtesy phrases to create artificial variety.
 
-Do not add a synthetic title, field label, action heading, or checklist. Use a
-short bullet list only when three or more genuinely independent obligations
-would be harder to understand in one paragraph.
+Do not add a synthetic title, another field label, action heading, or checklist.
 
 Keep accepted current behavior and optional follow-ups as natural boundary
 prose. Keep every safe exact `suggestion` byte-identical.
