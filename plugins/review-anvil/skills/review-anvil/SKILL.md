@@ -124,10 +124,11 @@ Capture the target's state at round start so all reviewers see the same input:
 
 ### 2. Dispatch reviewers in parallel
 
-When the resolved mix includes `codex-exec`, resolve `codex` once from the
-trusted host environment to an absolute canonical executable path and store it
-as `CODEX_BIN`. Reject a missing, relative, non-executable, or
-reviewed-worktree-contained result before round 1. Never pin a
+Before any Codex-backed dispatch in the run — reviewer, reproduction,
+adversarial, clarity, or action-lock — resolve `codex` lazily if `CODEX_BIN` is
+not already set. Resolve it from the trusted host environment to an absolute
+canonical executable path. Reject a missing, relative, non-executable, or
+reviewed-worktree-contained result before that dispatch. Never pin a
 package-manager-specific path or resolve the binary from the reviewed
 repository.
 
@@ -515,8 +516,8 @@ repository context.
 
 Read `references/clarity-pass-prompt.md` and dispatch one clean read-only
 renderer under the synthesis-side deadline rule. When using Codex for this
-renderer or for any action-lock auditor/repair pass, invoke the previously
-resolved `"$CODEX_BIN" exec -m gpt-5.6-luna -c 'model_reasoning_effort="max"' -c 'shell_environment_policy.inherit="all"' -c 'mcp_servers.webexapis.enabled=false'`;
+renderer or for any action-lock auditor/repair pass, apply the lazy resolution
+rule above and invoke `"$CODEX_BIN" exec -m gpt-5.6-luna -c 'model_reasoning_effort="max"' -c 'shell_environment_policy.inherit="all"' -c 'mcp_servers.webexapis.enabled=false'`;
 do not use `--ignore-user-config`, `gpt-5.6-sol`, or a lower reasoning effort. The clarity pass rewrites both
 the top-level report and eligible inline comments in one bundle. It is a copy
 editor, not another reviewer: it cannot change inventory, priority, decision,
