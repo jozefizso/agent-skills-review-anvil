@@ -147,7 +147,7 @@ Only the PR author resolving a GitHub review thread creates `author-resolved` st
 
 **Scope discipline.** The posted review should separate actionable in-scope findings from obvious pre-existing issues. Findings unrelated to the PR's stated purpose should appear, at most, under "Out-of-scope follow-ups" as separate-PR work and should not be emitted as inline actionable comments. Follow-ups are auto-approved only when they are confirmed, high-confidence `critical`/`high` (or clearly reproducible `medium`), not product/style decisions, not already tracked/dismissed, and separable from the current PR; ambiguous ones remain `needs_triage`.
 
-**Cleanup on success.** After a successful post (comment or approval), the helper removes `<REPORT_PATH>`, `<REPORT_PATH>.inline.json`, `<REPORT_PATH>.approval.json`, and `<REPORT_PATH>.followups.json`, and attempts to `rmdir` the parent directory (succeeds only if empty — concurrent runs are unaffected). On any abort (`die`), the artifacts are left in place so the user can inspect or post manually.
+**Cleanup on success.** After a successful post (comment or approval), the helper removes `<REPORT_PATH>`, `<REPORT_PATH>.inline.json`, `<REPORT_PATH>.approval.json`, and `<REPORT_PATH>.followups.json`, then removes the self-ignored parent directory when no other report artifacts remain. Retained proof bundles live in a separate host-created private directory outside the worktree and are unchanged. On any abort (`die`), report artifacts are also left in place so the user can inspect or post manually.
 
 ### 5. Report back
 
@@ -167,11 +167,16 @@ Surface the URL (or `posted (URL unavailable)`) to the user. If the helper scrip
 - Environment switches honored by the helper: `REVIEW_ANVIL_NO_APPROVE=1` (never submit an approval), `REVIEW_ANVIL_POST_INFRA_FAILURES=1` (manual-debug escape hatch that allows posting infrastructure-failure reports; default is to refuse them so watchdogs retry instead of notifying authors), `REVIEW_ANVIL_SKIP_DISMISSED=1` (legacy name: skip the full PR-history lookup for hosts without GraphQL access — degraded mode that also forces COMMENT), `REVIEW_ANVIL_DISMISSALS=<path>` (local-suppressions file, default `~/.review-anvil/dismissed-findings.json`; record entries with `pr-helper.sh dismiss <host> <owner> <repo> <n> <path> <pattern> [<reason>]`), `REVIEW_ANVIL_INLINE_MIN_SEVERITY=<critical|high|medium|low|nit>` (minimum severity posted inline; default `medium`), and `REVIEW_ANVIL_ENABLE_SUGGESTIONS=0` (disable helper-added GitHub suggestion blocks).
 - **An `APPROVE` decision submits a real GitHub approval from your authenticated `gh` account.** It counts toward branch-protection required reviews and reads to collaborators as your judgment — while the gate behind it is the engine's LLM classification. If that posture isn't acceptable for a repo or org, pass `approve: never` (or "never approve" / "comment only") and the run always posts plain `COMMENT` reviews. `REQUEST_CHANGES` is deliberately unsupported: blocking someone's merge on LLM judgment is a different risk class from commenting or approving.
 - What lands on the PR has passed the engine's reproduction/verification gates:
-  uncertain `medium`+ findings are reproduced against the actual code before
-  posting. When a finding cannot be confirmed, the report says what proof is
-  missing and that it was set aside, rather than presenting it as an actionable
-  review comment. False positives posted to a colleague's PR burn trust — the
-  engine treats precision as the product.
+  uncertain `medium`+ findings are checked against the actual reviewed snapshot
+  before posting. When a trusted `proof_runner` is configured, behavior claims
+  may use retained executable probes run with network disabled, source and
+  proof inputs read-only, filesystem reads restricted to
+  source/proof/runtime inputs, writes restricted to the proof runtime
+  directory, runner-authored results, a sanitized environment, and bounded
+  resources. When execution is unavailable or a finding cannot be confirmed,
+  the report says what proof is missing and sets the item aside rather than
+  presenting it as actionable. False positives posted to a colleague's PR burn
+  trust — the engine treats precision as the product.
 - When `adversarial:` is enabled, the posted report should include only the
   final verdict summary and survivor findings. The adversarial transcript stays
   out of GitHub; its effects are folded into dropped findings, deferred
@@ -183,7 +188,7 @@ Surface the URL (or `posted (URL unavailable)`) to the user. If the helper scrip
 
 ## Recovery: orphaned artifacts
 
-If the orchestrator dies between the engine finishing and the post step, the artifacts remain under `.review-anvil/` (self-gitignored — they can't dirty the worktree or end up in commits). Re-run step 4's `post` with the captured values to publish them: the helper's head-SHA check downgrades a stale APPROVE if the PR moved in the meantime, and the marker lookup prevents double posts if a previous attempt partially succeeded. Leftovers from runs you don't want to publish can simply be deleted.
+If the orchestrator dies between the engine finishing and the post step, report artifacts remain under the artifact-local, self-ignored `.review-anvil/` directory. Re-run step 4's `post` with the captured values to publish them: the helper's head-SHA check downgrades a stale APPROVE if the PR moved in the meantime, and the marker lookup prevents duplicate posts after partial success. Successful posting removes transient report artifacts but deliberately keeps proof bundles in their separate host-created private directory. Delete retained proof bundles manually when they are no longer useful.
 
 ## Pairing
 

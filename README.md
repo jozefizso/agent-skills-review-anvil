@@ -102,6 +102,15 @@ What makes it useful:
   different lenses, then the workflow merges overlapping findings.
 - **Claim checking:** single-reviewer material findings, risky deletions, and
   uncertain claims are checked before they become comments or fix commits.
+- **Retained executable proof:** with `proof_runner: /trusted/absolute/path`,
+  behavior claims get focused probes against an exact disposable snapshot. The
+  runner must disable network access, mount source and proof inputs read-only,
+  restrict reads to source/proof/runtime inputs, allow writes only under the
+  proof runtime directory, author execution results after the probe exits,
+  bound resources, and sanitize the environment. Proof bundles remain in a
+  host-created private directory outside the reviewed worktree and Git common
+  directory; without a runner, generated probes stay unexecuted and the finding
+  remains deferred.
 - **Verified fixes:** fixing runs use the project's test/build command when
   available and should not leave the branch newly red.
 - **Adaptive rounds:** fixing runs can stop early when the review converges,
@@ -125,7 +134,8 @@ Continue, Cline, Gemini CLI, …) can activate them by description match. In
 Claude Code, you can also invoke directly as `Skill review-anvil "<free-form
 args>"`; see `skills/review-anvil/SKILL.md` for the full behavior and advanced
 controls (`rounds`, `max_rounds`, `agents`, `focus`, `target`, `verify_cmd`,
-`reproduction`, `adversarial`, `approve`, `report_path`, and more).
+`reproduction`, `proof_runner`, `adversarial`, `approve`, `report_path`, and
+more).
 
 ### overleaf-comment
 

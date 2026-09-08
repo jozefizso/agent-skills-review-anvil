@@ -165,7 +165,7 @@ The improve workflow cannot publish GitHub inline review comments. On a successf
 
 GitHub does **not** notify on comment edits, so the author isn't pinged again — the original `cc @author` notification from step 3 is the only ping.
 
-Before calling `post-update` on a success outcome, read `<REPORT_PATH>.followups.json` (if present) and surface its entries to the user — the script deletes it afterwards. The script cleans up all four artifacts (`<REPORT_PATH>`, `.inline.json`, `.approval.json`, `.followups.json`) and removes the `.review-anvil/` directory when no other run's artifacts remain.
+Before calling `post-update` on a success outcome, read `<REPORT_PATH>.followups.json` (if present) and surface its entries to the user — the script deletes it afterwards. The script cleans up the four transient report artifacts (`<REPORT_PATH>`, `.inline.json`, `.approval.json`, `.followups.json`) and removes their self-ignored `.review-anvil/` directory when no other report artifacts remain. Retained proof bundles live in a separate host-created private directory outside the worktree and are unchanged.
 
 If `post-update` itself fails (rare: transient `gh` issue, comment was deleted by hand mid-run), surface the error but **do not undo the push** — the fix commits are already on the PR and a missing comment edit is recoverable. The user can manually edit the starting comment using the comment ID. The report file remains on disk for that purpose (cleanup is skipped on `post-update` failure).
 

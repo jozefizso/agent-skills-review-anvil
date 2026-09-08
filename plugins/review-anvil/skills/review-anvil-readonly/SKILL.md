@@ -30,18 +30,27 @@ Pass-through args the user may specify (non-exhaustive — any engine param not 
 - `agents: 2 codex + 1 claude` — custom reviewer mix
 - `min_fix_severity: <sev>` — drives the would-apply/suggestions split in the read-only report
 - `reproduction: auto|on|off` — default-on confidence gate for uncertain material findings before they become actionable report items
+- `proof_runner: /absolute/trusted/path` — isolated executable proof runner; when unset, generated probes are retained but behavior findings that need execution remain deferred
 - `adversarial: auto|challenge|targeted|full|strict` — optional adversarial review that attacks false positives and disproportionate/bloated fix plans before the final report
 - `adversarial_rounds: 1|2`, `disagreement_policy: defer|comment` — tune the adversarial gate; it remains read-only and bounded
 - `reviewer_timeout: <seconds>`, `report_path: <file>` — as in the engine
 
 After the engine completes, surface the synthesized report inline. **Do not** follow with edits, commits, or any side effects — that's exactly what `commit_mode=none` rules out.
 
-Adversarial review is still `commit_mode=none`: no edits, no commits, no
-staging, no pushes. Temporary prompt/reviewer/report artifacts under
-`.review-anvil/` or an explicit `report_path` are allowed. It can make the
-report more conservative by dropping false positives, deferring harmful or
-tech-debt-heavy fix plans, hardening fix prose, or stripping unsafe suggestion
-blocks.
+Read-only review still means no tracked edits, staging, commits, or pushes.
+Temporary prompt/reviewer/report artifacts under the artifact-local,
+self-ignored `.review-anvil/` directory are allowed. Retained proof bundles
+live in a host-created private directory outside the reviewed worktree and Git
+common directory; proof handling never edits tracked files or Git ignore
+metadata. A configured trusted `proof_runner` executes generated probes only
+against an exact disposable snapshot with network disabled, source and proof
+inputs read-only, filesystem reads restricted to source/proof/runtime inputs,
+writes limited to the proof runtime directory, runner-authored results, a
+sanitized environment, and bounded resources. The engine never executes a
+repository-provided runner or falls back to direct probe execution.
+Adversarial review remains read-only and may drop false positives, defer
+harmful or tech-debt-heavy fix plans, harden fix prose, or strip unsafe
+suggestion blocks.
 
 Default local policy: leave adversarial review off for ordinary fast/local
 reviews. Append `adversarial: auto` when the user asks for a careful,

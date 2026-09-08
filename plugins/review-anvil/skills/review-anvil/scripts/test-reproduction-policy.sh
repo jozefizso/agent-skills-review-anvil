@@ -159,6 +159,12 @@ effect_with_reproduction() {
         verifier_failure)
             printf 'deferred:verifier-unavailable'
             ;;
+        runner_unavailable)
+            printf 'deferred:proof-runner-unavailable'
+            ;;
+        runner_failure)
+            printf 'deferred:proof-runner-failed'
+            ;;
         none)
             fail "candidate has no reproduction verdict"
             ;;
@@ -211,6 +217,8 @@ low-nit-style|low|1|none|none|low|no|suggestion|suggestion
 low-simplification|low|1|simplification|none|low|no|suggestion|suggestion
 previously-dismissed|high|1|dismissed|none|high|no|deferred:previously-dismissed|deferred:previously-dismissed
 verifier-unavailable|high|1|inferred|verifier_failure|high|yes|deferred:verifier-unavailable|deferred:reproduction-disabled
+runtime-proof-runner-unset|medium|1|runtime|runner_unavailable|medium|yes|deferred:proof-runner-unavailable|deferred:reproduction-disabled
+runtime-proof-runner-failed|high|1|runtime,inferred|runner_failure|high|yes|deferred:proof-runner-failed|deferred:reproduction-disabled
 CASES
 
     printf 'test-reproduction-policy: all reproduction policy examples passed\n'

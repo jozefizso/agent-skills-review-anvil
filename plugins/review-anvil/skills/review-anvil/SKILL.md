@@ -34,6 +34,7 @@ Parse the user's free-form args string into:
 | `commit_mode` | `per_fix` | `per_fix` (one commit per fix-group) or `none` ("review only", "don't commit", "no fixes") |
 | `approve` | `allowed` | "never approve", "comment only", `approve: never` — always write `{"event": "COMMENT"}` to `.approval.json`. Presets additionally export `REVIEW_ANVIL_NO_APPROVE=1` so the helper enforces it mechanically. Only meaningful for review-only PR runs |
 | `reproduction` | `auto` | `auto`, `on`, or `off` — default-on batched reproduction of uncertain `medium`+ findings before auto-fix/reporting; "skip reproduction" disables it and marks single-reviewer material findings as unconfirmed |
+| `proof_runner` | unavailable | `proof_runner: /absolute/trusted/path` — opt-in isolated executable proof runner; generated probes remain unexecuted when unset |
 | `adversarial` | `off` | `off`, `auto`, `challenge`, `targeted`, `full`, or `strict` — read-only post-synthesis review that attacks candidate findings and would-apply plans before they become final guidance |
 | `adversarial_rounds` | `1` | one adversarial pass by default; max 2, and a second pass runs only when the first pass materially changes `medium`+ guidance |
 | `disagreement_policy` | `defer` | `defer` moves unresolved material disputes to Deferred; `comment` keeps the finding actionable but forces review-only PR approvals to COMMENT |
@@ -59,6 +60,7 @@ human-readable provenance; it does not replace the marker.
 - Adaptive continuation is on by default for `per_fix`. A plain "3 rounds" means `rounds=3` with `max_rounds` between `4` and `6` by diff size, so the organizing agent may continue after round 3 if §6 says another pass is justified. Use "exactly 3 rounds", "only 3 rounds", "no extra rounds", or `max_rounds: 3` when the run must stop at the requested count.
 - If `commit_mode=none` and the user explicitly set `max_rounds > rounds`, warn and collapse `max_rounds` to `rounds`. Extra normal rounds review the same baseline, so use `rounds` for reviewer redundancy and `adversarial` for skeptical challenge.
 - `reproduction=auto` and `reproduction=on` both run the selective batched reproduction gate in §3. `auto` may skip dispatch only when there are no candidates. `off` is allowed for speed, but the round summary and final report must say it was disabled; unconfirmed single-reviewer `medium`+ findings stay in Deferred unless the orchestrator independently reproduced them from code/tests/runtime evidence.
+- `proof_runner` is unavailable unless an explicit user or system value supplies an absolute executable path outside the reviewed worktree. Never infer it from the reviewed repository, `PATH`, or a repository config file. Reject a configured relative, non-executable, or worktree-contained path before executable proof starts; `run-proof.sh` performs the final canonical-path and disposable-snapshot/proof-directory separation checks.
 - `adversarial` applies only when `commit_mode=none`. If set with `per_fix`, warn and ignore it — productive mode already applies real fixes and gates them with the build/test command. Reject `adversarial_rounds > 2`; adversarial loops must be bounded. `auto` means choose the cheapest sufficient adversarial mode after normal synthesis using the default policy below.
 
 ### PR-target / per_fix incompatibility
@@ -127,7 +129,7 @@ Capture the target's state at round start so all reviewers see the same input:
 **Use the Agent tool for `claude-exec` reviewers. Do NOT use `claude -p` via Bash — that path is for non-Claude hosts only.**
 
 - **`claude-exec`**: Agent tool, `subagent_type: "general-purpose"`, the assembled Reviewer Prompt as `prompt`, `run_in_background: true`. The Agent tool streams natively, has no `--max-turns` ceiling, and inherits the session environment.
-- **`codex-exec`**: Bash through the wrapper: `REVIEW_ANVIL_REQUIRE_FINDINGS=1 bash <wrapper> .review-anvil/round<N>-<label>.md <reviewer_timeout> -- codex exec -m gpt-5.6-luna -c 'model_reasoning_effort="max"' --ephemeral --sandbox read-only -C <project-dir> '<prompt>' < /dev/null`, with `run_in_background: true`. The validation flag makes the wrapper reject confirmation-only, plan-only, or otherwise incomplete responses that do not end with the required fenced findings block. `--ephemeral` prevents reviewer sessions from leaking into later dispatches. The `< /dev/null` is load-bearing: codex takes its prompt as argv and must not inherit an open stdin — the wrapper passes its stdin through (`<&0`, which the claude fallback needs), and codex blocking on a never-closing fd 0 is a known hang class from real runs.
+- **`codex-exec`**: Bash through the wrapper: `REVIEW_ANVIL_REQUIRE_FINDINGS=1 bash <wrapper> .review-anvil/round<N>-<label>.md <reviewer_timeout> -- /opt/homebrew/bin/codex exec -m gpt-5.6-luna -c 'model_reasoning_effort="max"' -c 'shell_environment_policy.inherit="all"' -c 'mcp_servers.webexapis.enabled=false' --ephemeral --sandbox read-only -C <project-dir> '<prompt>' < /dev/null`, with `run_in_background: true`. The validation flag makes the wrapper reject confirmation-only, plan-only, or otherwise incomplete responses that do not end with the required fenced findings block. `--ephemeral` prevents reviewer sessions from leaking into later dispatches. The `< /dev/null` is load-bearing: codex takes its prompt as argv and must not inherit an open stdin — the wrapper passes its stdin through (`<&0`, which the claude fallback needs), and codex blocking on a never-closing fd 0 is a known hang class from real runs.
 - Send all M reviewers in a *single message* with multiple tool calls. The harness notifies you on completion; do not poll.
 
 #### In Codex CLI or other hosts without the Agent tool
@@ -145,7 +147,7 @@ Capture the target's state at round start so all reviewers see the same input:
 
   `--tools` restricts the built-in tool set; `--allowedTools` auto-approves the listed safe tool uses and is variadic, so the prompt MUST arrive via stdin (the wrapper passes its stdin through). `--permission-mode dontAsk` keeps the fallback non-interactive by denying anything outside the allowed/read-only path. **Do not size `--max-turns` to the task** — task-sized caps keep biting (20 was hit in production), and a reviewer that hits the cap loses its entire output. The wrapper's wall-clock timeout is the real bound; `100` is a runaway backstop that should never bind.
 
-- **`codex-exec`**: same validation-enabled wrapper around `codex exec -m gpt-5.6-luna -c 'model_reasoning_effort="max"' --ephemeral --sandbox read-only -C <project-dir> '<prompt>' < /dev/null` — stdin from `/dev/null` here too.
+- **`codex-exec`**: same validation-enabled wrapper around `/opt/homebrew/bin/codex exec -m gpt-5.6-luna -c 'model_reasoning_effort="max"' -c 'shell_environment_policy.inherit="all"' -c 'mcp_servers.webexapis.enabled=false' --ephemeral --sandbox read-only -C <project-dir> '<prompt>' < /dev/null` — stdin from `/dev/null` here too.
 - Launch all M wrapper invocations as background shell processes and `wait`.
 
 #### Bash-dispatched reviewers MUST go through `run-reviewer.sh`
@@ -249,7 +251,10 @@ Plausible-but-wrong findings are the dominant failure mode of LLM review, and bo
   - every `medium`+ deletion/dead-code/unused/redundant-code/simplification finding, and any deletion/simplification that would remove runtime code, public docs/API, compatibility behavior, or another high-blast-radius surface, regardless of reviewer count,
   - every `critical`/`high` finding whose evidence is mostly inferred from a hunk rather than confirmed from code/runtime context,
   - every finding the orchestrator is materially uncertain about after reading the cited files.
-- When `reproduction=auto` or `on` and candidates exist, dispatch **one batched reproduction verifier** using `references/reproduction-prompt.md`. Do not spawn one verifier per finding unless the batch is too large to fit in one prompt. Dispatch it backgrounded under the Concurrency section's deadline rule — never an unbounded foreground wait. The verifier is not another broad review pass; it returns `confirmed`, `refuted`, `unclear`, `narrowed`, or `downgraded` verdicts for the supplied complete canonical finding IDs only, and returns each ID unchanged.
+- When `reproduction=auto` or `on` and candidates exist, run the two batched verifier passes defined in `references/reproduction-prompt.md`. Do not spawn one verifier per finding unless the batch is too large to fit in one prompt. Both passes run backgrounded under the Concurrency section's deadline rule — never an unbounded foreground wait.
+  1. Dispatch `MODE=AUTHOR`. Validate its final `proofs` block and referenced `proof-file` blocks exactly as the reference requires. Retain rejected material instead of repairing model-supplied proof code.
+  2. For each valid executable manifest, materialize the bundle in the host-created private proof root and create the exact disposable snapshot. If `proof_runner` is unavailable, retain the bundle without execution. Otherwise invoke the trusted engine-root `run-proof.sh` once for that manifest; never execute the probe directly or use a runner from the reviewed repository. Remove the disposable snapshot after the runner completes.
+  3. Dispatch `MODE=VERDICT` with the validated static evidence and each retained bundle's runner output or explicit unavailable/failed state. This pass returns `confirmed`, `refuted`, `unclear`, `narrowed`, or `downgraded` for the supplied complete canonical finding IDs only and returns each ID unchanged.
 - Apply reproduction verdicts before auto-fix/reporting:
   - `confirmed` and `narrowed` findings may remain actionable, with narrowed wording when supplied.
   - `downgraded` findings re-enter the normal severity gates after changing severity.
@@ -262,8 +267,9 @@ Plausible-but-wrong findings are the dominant failure mode of LLM review, and bo
 
 Canonical examples for where reproduction helps and where it must stay out of
 the way live in `references/reproduction-examples.md`. After changing this
-policy or the reproduction prompt, run `scripts/test-reproduction-policy.sh`
-alongside the PR helper tests.
+policy, the reproduction prompt, or the proof-runner boundary, run
+`scripts/test-reproduction-policy.sh` and `scripts/test-run-proof.sh` alongside
+the PR helper tests.
 
 #### Approving out-of-scope follow-ups
 
@@ -503,7 +509,7 @@ repository context.
 Read `references/clarity-pass-prompt.md` and dispatch one clean read-only
 renderer under the synthesis-side deadline rule. When using Codex for this
 renderer or for any action-lock auditor/repair pass, invoke Codex explicitly as
-`codex exec -m gpt-5.6-luna -c 'model_reasoning_effort="max"'`; do not use
+`/opt/homebrew/bin/codex exec -m gpt-5.6-luna -c 'model_reasoning_effort="max"' -c 'shell_environment_policy.inherit="all"' -c 'mcp_servers.webexapis.enabled=false'`; do not use
 `--ignore-user-config`, `gpt-5.6-sol`, or a lower reasoning effort. The clarity pass rewrites both
 the top-level report and eligible inline comments in one bundle. It is a copy
 editor, not another reviewer: it cannot change inventory, priority, decision,
@@ -635,10 +641,10 @@ After the final round, emit the **Final Report** (Output Format). If `report_pat
 
 Within a round: parallel (single multi-tool-call message). Between rounds: strictly sequential.
 
-Synthesis-side dispatches — the batched reproduction verifier, every adversary, and each two-auditor action-lock wave — follow the same parallel rule (all agents of a pass launched backgrounded in one message, never serially awaited) and get a hard deadline equal to the **effective** `reviewer_timeout` (after any >5000-line doubling):
+Synthesis-side dispatches — both batched reproduction passes, every adversary, and each two-auditor action-lock wave — follow the same parallel rule (all agents of a pass launched backgrounded in one message, never serially awaited) and get a hard deadline equal to the **effective** `reviewer_timeout` (after any >5000-line doubling):
 
 - Bash dispatches enforce the deadline mechanically: run them under `run-reviewer.sh` with that cap.
-- Agent-tool dispatches have no built-in timeout — the source of a production run hanging forever at "awaiting verdicts". Give each dispatch wave exactly **one** one-shot deadline alarm: a single background `sleep <cap>` Bash task launched in the same message as the agents, killed as soon as they all return. When the alarm fires first, salvage every complete per-ID verdict already present in output files and apply the safe failure for anything missing: reproduction verifier failure → Deferred; adversary failure → continue and note; action-lock failure → restore exact source requested-work prose for every unverifiable row and force COMMENT; `strict` → COMMENT. Record `timed out at <cap>s` in Run Details.
+- Agent-tool dispatches have no built-in timeout — the source of a production run hanging forever at "awaiting verdicts". Give each dispatch wave exactly **one** one-shot deadline alarm: a single background `sleep <cap>` Bash task launched in the same message as the agents, killed as soon as they all return. When the alarm fires first, salvage every complete per-ID result already present in output files and apply the safe failure for anything missing: AUTHOR or VERDICT reproduction pass failure → Deferred; adversary failure → continue and note; action-lock failure → restore exact source requested-work prose for every unverifiable row and force COMMENT; `strict` → COMMENT. Record `timed out at <cap>s` in Run Details.
 
 No recurring or polling timers: the harness notifies on completion, so the one-shot alarm above is the only sanctioned wakeup. After the final report is emitted (and its path printed, when `report_path` is set), kill any still-pending alarm — nothing may fire after completion.
 
@@ -647,8 +653,8 @@ No recurring or polling timers: the harness notifies on completion, so the one-s
 **Read `references/reviewer-prompt.md` (next to this SKILL.md; same trusted-root resolution as scripts) at dispatch time.** It defines the per-reviewer lens assignment (the four pillars partition across reviewers — M identical prompts buy redundancy and dedup work, not coverage), the context block (TARGET / PRIOR ROUNDS / SCOPE OF THIS REVIEW / PR REVIEW HISTORY / YOUR LENS), the fixed task block (review principles, severity guide, structured finding keys, the fenced findings-YAML output contract), and the fill-in rules (itemized PRIOR ROUNDS construction; `commit_mode=none` variations). Reviewers return prose findings only — never patches.
 
 When `adversarial` is enabled, normal reviewers still use `reviewer-prompt.md`.
-When `reproduction` dispatches, the verifier uses
-`references/reproduction-prompt.md` and receives only the stable candidate
+When `reproduction` dispatches, both `MODE=AUTHOR` and `MODE=VERDICT` use
+`references/reproduction-prompt.md` and receive only the stable candidate
 finding IDs selected by synthesis. The post-synthesis adversaries use
 `references/adversarial-prompt.md` and receive the surviving stable candidate
 finding / would-apply IDs produced by synthesis and reproduction.
