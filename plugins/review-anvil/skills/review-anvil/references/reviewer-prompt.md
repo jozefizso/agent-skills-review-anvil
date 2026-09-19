@@ -11,10 +11,24 @@ M identical prompts buy redundancy and dedup work, not coverage — when M ≥ 2
 
 | Lens pack | Covers |
 |---|---|
-| `correctness` | correctness, data flow, edge cases; verify what the layer below actually does in the configured backend/runtime, not what the abstract API promises |
-| `simplicity` | simplicity / minimization; walk the **minimization ladder** (below) and question abstractions before reviewing their implementation; dead code; redundant defense-in-depth where one layer is broken |
-| `blast-radius` | production blast-radius: failure modes, fallback paths that swallow errors, operational concerns (logging, config, migrations, rollout) |
-| `maintainability` | maintainability; cross-file consistency (same pattern handled differently elsewhere?); test coverage of the change; `pragma: no cover`/`noqa` suppression smells |
+| `correctness` | correctness, data flow, edge cases, PHP 5.3/5.6 behavior, and MySQL 5.7/8.0 query semantics; verify what the configured PHP extension, driver, and server actually do |
+| `simplicity` | simplicity / minimization; walk the **minimization ladder** (below) and question abstractions before reviewing their implementation; dead code; redundant defense-in-depth where one layer is broken; avoid modern-PHP rewrites that violate the supported runtime floor |
+| `blast-radius` | production blast-radius: failure modes, swallowed errors, SQL injection, transaction/data-loss risk, schema migrations, locks, charset/authentication changes, configuration, and mixed MySQL-version rollout |
+| `maintainability` | maintainability; cross-file consistency; tests across the supported matrix; explicit and reachable version gates; PHP error-suppression, global-state, and `error_reporting` smells |
+
+The fixed technology baseline applies to every lens:
+
+- Shared application code must parse and behave on PHP 5.3 and PHP 5.6. Do not
+  suggest PHP 7+ syntax or APIs. Treat syntax introduced after PHP 5.3 as a
+  defect unless repository evidence confines the file to PHP 5.6.
+- Database code and migrations must work on Oracle MySQL 5.7 and 8.0. "MySQL
+  7" means MySQL 5.7; do not use MariaDB as a behavioral substitute.
+- Review the actual `mysql`, `mysqli`, or PDO path and its deployed client
+  capabilities. Check prepared-statement behavior, connection charset,
+  authentication, TLS, type conversion, persistent state, and error modes.
+- Check 5.7/8.0 SQL-mode, reserved-word, collation, JSON, grouping, ordering,
+  generated-column, index, DDL/transaction, and migration-rollout differences.
+  Flag CTEs, window functions, and other 8.0-only SQL on shared paths.
 
 The `simplicity` lens applies a **minimization ladder**, adapted from
 [ponytail](https://github.com/DietrichGebert/ponytail)'s "lazy senior developer"
@@ -56,13 +70,18 @@ fetch it. For PR-locator targets add: "the local checkout may not
 match the PR head — trust the PR diff, and fetch file contents at the
 PR head SHA via `gh` when you need surrounding context."}
 
+TECHNOLOGY BASELINE
+PHP 5.3 and PHP 5.6; Oracle MySQL 5.7 and MySQL 8.0. Shared code must satisfy
+the oldest applicable PHP runtime and both database versions. A request that
+says "MySQL 7" refers to MySQL 5.7.
+
 PRIOR ROUNDS
 {Per prior round, itemized so this reviewer can avoid re-raising:
   Round 1 (7 fixes applied, commits a1b2c3d..7e8f9a0; verification passed):
     addressed:
       - [high] auth — missing CSRF check on token refresh
     deferred:
-      - [medium] db — pool sizing (introduces new dependency: pgbouncer)
+      - [medium] db-migration — 8.0-only window query on the MySQL 5.7 path
 If this is round 1: "None — this is round 1."}
 
 SCOPE OF THIS REVIEW
@@ -116,16 +135,24 @@ Review principles:
   changed region before flagging it.
 - Question whether the code should exist at all before reviewing its
   implementation. If not, explain why removing it is the smallest fix.
-- When code builds on a framework primitive, verify what the layer
-  below actually does in the configured backend/runtime, not what the
-  abstract API promises.
-- Scrutinize fallback paths: defensive try/except that swallows a
-  required dependency's errors is worse than crashing.
-- Check cross-file consistency: if the same pattern is handled
-  differently elsewhere in the repo, say so.
+- When code builds on a PHP or database primitive, verify what the configured
+  extension, client library, SQL mode, and server version do. Do not rely on a
+  modern PHP manual, a generic SQL contract, or MariaDB behavior.
+- Check every changed PHP file for PHP 5.3 parse compatibility unless repository
+  evidence proves it is PHP 5.6-only. Also check behavior differences between
+  5.3 and 5.6, including closure binding, references, sessions/serialization,
+  date/time parsing, streams, and error/exception handling.
+- Check queries, schema changes, and migrations on MySQL 5.7 and 8.0. Require
+  deterministic results under deployed SQL modes and safe mixed-version
+  rollout. Inspect parameter binding, active connection charset, transaction
+  boundaries, implicit DDL commits, locks, rollback, and data preservation.
+- Scrutinize fallback paths: swallowed PHP warnings/exceptions or ignored
+  database errors can turn a visible failure into corruption or partial writes.
+- Check cross-file consistency: if the same legacy compatibility pattern is
+  handled differently elsewhere in the repo, say so.
 - Prefer the smallest clear fix and existing local patterns. Suggest a new
-  layer, helper, or abstraction only when evidence shows the simple approach
-  would fail or threaten correctness or safety.
+  layer, helper, driver, framework, or abstraction only when evidence shows the
+  simple compatible approach would fail or threaten correctness or safety.
 - Apply the ASD-STE100-inspired language contract in
   `asd-ste100-inspired.md` to generated findings and suggested fixes.
   Preserve code identifiers, diagnostics, URLs, and schema tokens.
@@ -246,7 +273,7 @@ For each issue, return a structured finding with these keys:
   applicable as a GitHub suggested change. Omit for design concerns,
   cross-file edits, deleted lines, generated code, or anything that
   requires judgment.
-- file: (OPTIONAL) repo-relative path, e.g. "src/auth.ts". Omit for
+- file: (OPTIONAL) repo-relative path, e.g. "src/Auth.php". Omit for
   findings without a specific file anchor.
 - line: (OPTIONAL) line number on the "new" side of the diff, or a
   range `<start>-<end>`. Omit if `file` is omitted or the finding
@@ -267,7 +294,7 @@ block containing one YAML list item per finding:
   ```findings
   - severity: high
     area: auth
-    file: src/auth.ts
+    file: src/Auth.php
     line: 42-50
     what: ...
     why: ...

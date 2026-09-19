@@ -80,14 +80,14 @@ Delegate code review, plan review, and deep exploration tasks to **Claude Code C
 
 <img src="assets/review-anvil-logo.png" alt="review-anvil logo" width="320" />
 
-`review-anvil` turns a code review into a repeatable loop: `codex-exec`
-and `claude-exec` reviewers inspect the same snapshot, their findings are
-merged into one report, uncertain claims are checked against the code, and the
-loop either reports, commits fixes, or updates a PR.
+`review-anvil` turns a legacy PHP code review into a repeatable loop:
+`codex-exec` and `claude-exec` reviewers inspect the same snapshot, their
+findings are merged into one report, uncertain claims are checked against the
+code, and the loop either reports, commits fixes, or updates a PR.
 
-It is built for the messy middle after a first implementation, when you want
-several independent review passes, fewer bogus findings, and fixes that are
-checked before they land.
+This distribution is tailored for applications that must support PHP 5.3 and
+PHP 5.6 with Oracle MySQL 5.7 and 8.0. References to "MySQL 7" are normalized
+to MySQL 5.7; Oracle MySQL has no 7.x release line.
 
 | I want to... | Use | Edits code | Commits | Pushes | Posts to PR | Can approve |
 |---|---|---:|---:|---:|---:|---:|
@@ -102,6 +102,10 @@ What makes it useful:
   different lenses, then the workflow merges overlapping findings.
 - **Claim checking:** single-reviewer material findings, risky deletions, and
   uncertain claims are checked before they become comments or fix commits.
+- **Legacy compatibility:** every lens checks the PHP 5.3 syntax floor, PHP
+  5.3/5.6 behavior differences, the repository's actual database driver, and
+  MySQL 5.7/8.0 differences in SQL modes, reserved words, collations, JSON,
+  grouping, authentication, transactions, DDL, and migrations.
 - **Retained executable proof:** with `proof_runner: /trusted/absolute/path`,
   behavior claims get focused probes against an exact disposable snapshot. The
   runner must disable network access, mount source and proof inputs read-only,
@@ -111,8 +115,9 @@ What makes it useful:
   host-created private directory outside the reviewed worktree and Git common
   directory; without a runner, generated probes stay unexecuted and the finding
   remains deferred.
-- **Verified fixes:** fixing runs use the project's test/build command when
-  available and should not leave the branch newly red.
+- **Verified fixes:** fixing runs lint changed PHP under PHP 5.3 and 5.6 and
+  exercise affected behavior against MySQL 5.7 and 8.0 when those paths support
+  the full matrix. Missing targets are reported, not treated as a green run.
 - **Adaptive rounds:** fixing runs can stop early when the review converges,
   or continue up to 6 total rounds when useful fixes are still surfacing. Use
   "exactly 3 rounds" or `max_rounds: 3` when you want a hard stop.

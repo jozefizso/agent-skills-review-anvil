@@ -56,10 +56,10 @@ You receive one JSON object named `FROZEN_CLARITY_PACKET`:
       "id": "RAV-RUN3-R2-F001",
       "severity": "critical | high | medium | low | nit",
       "area": "machine-safe-area",
-      "report_path": "src/auth.ts",
+      "report_path": "src/Auth.php",
       "report_start_line": 42,
       "report_line": 42,
-      "path": "src/auth.ts",
+      "path": "src/Auth.php",
       "start_line": 48,
       "line": 50,
       "side": "RIGHT",
@@ -109,7 +109,7 @@ Return one JSON object and no surrounding prose or Markdown fence:
   ],
   "inline_comments": [
     {
-      "path": "src/auth.ts",
+      "path": "src/Auth.php",
       "line": 50,
       "side": "RIGHT",
       "severity": "high",
@@ -235,7 +235,7 @@ Use this shape:
 
 | Severity | Location | Issue | Suggested change |
 |---|---|---|---|
-| High | `src/auth.ts:42` | <Complete problem and concrete impact.> | <Complete requested change.> <!-- review-anvil-report: ... --> |
+| High | `src/Auth.php:42` | <Complete problem and concrete impact.> | <Complete requested change.> <!-- review-anvil-report: ... --> |
 
 </details>
 

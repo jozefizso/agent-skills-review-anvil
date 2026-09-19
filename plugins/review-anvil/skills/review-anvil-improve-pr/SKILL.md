@@ -1,6 +1,6 @@
 ---
 name: review-anvil-improve-pr
-description: Multi-agent review-and-improve loop for a GitHub PR you have checked out — posts a "starting" PR comment cc'ing the original author, runs requested rounds plus any adaptive continuation, applies fix commits to the local branch after each round, pushes everything back to the PR, then edits the starting comment in-place with the synthesized report (or a failure summary). Auto-detects the PR from the currently checked-out branch when no locator is supplied. Use when the user wants to "improve a PR", "review and commit fixes", "iterate on my PR", or "review and push back" against a checked-out PR branch. Requires `gh`, `uuidgen`, `jq`, and `uv` or `python3` on PATH. Activates the `review-anvil` engine in per_fix mode.
+description: Review and improve a checked-out GitHub PR for a legacy PHP 5.3/5.6 application on MySQL 5.7/8.0. Runs requested and adaptive review rounds, applies compatible fix commits, verifies the supported runtime/database matrix, pushes, and updates one PR comment. Auto-detects the checked-out PR when no locator is supplied. Requires `gh`, `uuidgen`, `jq`, and `uv` or `python3`.
 ---
 
 # review-anvil-improve-pr

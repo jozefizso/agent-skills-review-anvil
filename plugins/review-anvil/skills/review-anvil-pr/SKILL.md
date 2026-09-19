@@ -1,6 +1,6 @@
 ---
 name: review-anvil-pr
-description: Read-only multi-agent review of a GitHub Pull Request, with the synthesized report posted back as a PR comment so the author is notified. Use when the user wants to review a GitHub PR (github.com or GitHub Enterprise) and post a structured review back to the PR conversation. Auto-detects the PR from the currently checked-out branch when no locator is supplied. Requires `gh`, `uuidgen`, `jq`, and `uv` or `python3` on PATH. Activates the `review-anvil` engine in read-only mode and orchestrates the shell helper for posting.
+description: Read-only multi-agent GitHub PR review for legacy PHP 5.3/5.6 applications on MySQL 5.7/8.0, posted back to the PR. Auto-detects the checked-out PR when no locator is supplied. Requires `gh`, `uuidgen`, `jq`, and `uv` or `python3`. Activates `review-anvil` in read-only mode and uses the posting helper.
 ---
 
 # review-anvil-pr

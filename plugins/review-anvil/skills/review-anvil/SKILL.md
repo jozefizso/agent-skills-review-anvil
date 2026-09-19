@@ -1,11 +1,57 @@
 ---
 name: review-anvil
-description: Use when a user requests repeated code-review and fix rounds, an iterative review loop, multiple reviewer passes, or hardening a change through codex/claude review.
+description: Use when a user requests repeated review/fix rounds or PR review for a legacy PHP application that must run on PHP 5.3 and 5.6 with MySQL 5.7 and 8.0.
 ---
 
 # review-anvil — Iterative Multi-Agent Fix/Review Loop
 
 Wrap a code change in **requested rounds of parallel reviewer subagents + orchestrator-applied fixes**. Each round = (parallel review by M agents, each with a distinct lens) → (you synthesize and **verify** findings) → (you apply fixes, run the build/test gate, commit) → next round. In productive `per_fix` runs, the orchestrator may continue adaptively after the requested rounds until convergence or `max_rounds`.
+
+## Legacy PHP/MySQL target profile
+
+This skill family is specialized for one compatibility envelope: PHP 5.3 and
+PHP 5.6 application code running against MySQL 5.7 and MySQL 8.0. Interpret a
+request that says "MySQL 7" as MySQL 5.7; Oracle MySQL has no 7.x release line.
+Do not silently substitute MariaDB behavior for either MySQL target.
+
+Every review, reproduction decision, fix, and verification plan must preserve
+the full envelope unless the repository gives a narrower boundary for the
+changed code:
+
+- Parse and run shared PHP code on the oldest applicable runtime. Code shared
+  by both deployments must remain valid PHP 5.3 syntax and behavior. In
+  particular, reject short arrays, traits, generators, `finally`, `::class`,
+  variadics, argument unpacking, exponentiation, `use function`/`use const`,
+  array dereferencing, and other post-5.3 syntax unless the file is proven to
+  execute only on PHP 5.6. Do not recommend PHP 7+ types, operators, APIs, or
+  error semantics.
+- Check PHP 5.3-to-5.6 differences that change observable behavior: closure
+  binding and `$this`, session and serialization behavior, error/exception
+  handling, reference semantics, date/time parsing, stream wrappers, extension
+  availability, and driver behavior. Treat a version-specific branch as valid
+  only when its runtime selection is explicit and reachable.
+- Review SQL and migrations on both MySQL 5.7 and 8.0. Flag 8.0-only features
+  such as CTEs and window functions when the same path must run on 5.7. Check
+  reserved-word changes, `ONLY_FULL_GROUP_BY` and strict SQL modes, zero dates,
+  implicit casts, collations/`utf8mb4`, index limits, generated columns, JSON
+  behavior, identifier quoting, and deterministic grouping/order.
+- Check connection compatibility across the repository's actual PHP driver and
+  both servers, including TLS, authentication plugins, charset negotiation,
+  native versus emulated prepares, integer/decimal conversion, and persistent
+  connection state. Do not assume PHP 5-era clients can authenticate to a
+  default MySQL 8.0 account without repository or deployment evidence.
+- Treat string-built SQL, escaping with the wrong active connection charset,
+  unsafe deserialization, loose comparison around credentials/tokens, path
+  traversal, file inclusion, and output escaping as security-sensitive. Prefer
+  the repository's existing parameterized-query path; do not propose a broad
+  framework or driver migration as a local fix.
+- Preserve transactional and migration safety on both servers: atomicity
+  boundaries, implicit DDL commits, lock duration, online rollout order,
+  rollback/data preservation, and mixed-version deployment windows.
+
+When the required runtime or database matrix cannot be exercised, do not call
+compatibility proven. Use static evidence where decisive; otherwise defer the
+claim and name the missing PHP/MySQL target.
 
 ## Preset skills
 
@@ -27,8 +73,8 @@ Parse the user's free-form args string into:
 | `rounds` | `3` | "5 rounds", "three rounds", "do 4 passes" |
 | `max_rounds` | `per_fix`: `min(max(6, rounds), rounds + adaptive budget)` — budget 1/2/3 for small/medium/large diffs (see Parsing); `rounds` for `commit_mode=none` | "max 4 rounds", "allow one extra round", "3 rounds, continue if needed"; "exactly 3 rounds", "only 3 rounds", or "no extra rounds" keeps `max_rounds=rounds` |
 | `agents` | `3` | "3 agents", "2 reviewers", or a mix like `"2 codex + 1 claude"` |
-| `focus` | the four pillars (correctness, maintainability, simplicity, production blast-radius) | "focus on async correctness"; an `only:` prefix replaces the defaults instead of appending |
-| `target` | auto-detect | "PR #42", "branch", "uncommitted", "src/auth/", "last 3 commits" |
+| `focus` | the four pillars plus the fixed legacy compatibility profile | "focus on MySQL migration safety"; an `only:` prefix replaces the four pillars but never removes the compatibility profile |
+| `target` | auto-detect | "PR #42", "branch", "uncommitted", "src/Auth/", "last 3 commits" |
 | `allow_new_deps` | `false` | "allow new deps" — auto-apply fixes that introduce new imports/subsystems instead of deferring them |
 | `min_fix_severity` | `medium` | "auto-fix high and above", "fix only critical" — minimum severity for auto-fix; lower findings are listed, not applied |
 | `commit_mode` | `per_fix` | `per_fix` (one commit per fix-group) or `none` ("review only", "don't commit", "no fixes") |
@@ -38,7 +84,7 @@ Parse the user's free-form args string into:
 | `adversarial` | `off` | `off`, `auto`, `challenge`, `targeted`, `full`, or `strict` — read-only post-synthesis review that attacks candidate findings and would-apply plans before they become final guidance |
 | `adversarial_rounds` | `1` | one adversarial pass by default; max 2, and a second pass runs only when the first pass materially changes `medium`+ guidance |
 | `disagreement_policy` | `defer` | `defer` moves unresolved material disputes to Deferred; `comment` keeps the finding actionable but forces review-only PR approvals to COMMENT |
-| `verify_cmd` | auto-detect | "verify with `npm test`", `verify_cmd: none` to skip — build/test command run after each round's fixes (see "Build/test gate"; per_fix only) |
+| `verify_cmd` | auto-detect | "verify with `composer test`", `verify_cmd: none` to skip — PHP syntax checks plus the project's test command run after each round's fixes (see "Build/test gate"; per_fix only) |
 | `reviewer_timeout` | `600` (`420` for small diffs) | "timeout 10 minutes" — hard per-reviewer wall-clock cap in seconds for Bash-dispatched reviewers (see `run-reviewer.sh`). Default is ~3× the slowest legitimate reviewer observed in real runs (98–213s); when unset and the diff is under ~500 changed lines (added+removed — the same measure as the adaptive budget tiers), requested rounds use `420` (~2× that observed max) so a hung reviewer pins the wave 3 minutes less. Adaptive rounds always use the full base value — `600`, or `1200` after the >5000-line doubling (doubling transforms the base; the small-diff reduction never applies to adaptive rounds). Explicit user values are never scaled or doubled |
 | `report_path` | unset | File path; when set, the engine writes the final report there (creating parent dirs) and prints exactly that path as its last output line so downstream consumers can pick it up |
 
@@ -86,11 +132,12 @@ Adaptive continuation details belong in Run Details unless they change the revie
 ### Examples
 
 - `Skill review-anvil` → 3 requested rounds, adaptive up to 4–6 total rounds by diff size, 2 codex + 1 claude, four-pillar focus, auto-detected target.
-- `Skill review-anvil "5 rounds, 2 codex + 1 claude, focus: async correctness, target: PR #42"`
+- `Skill review-anvil "5 rounds, 2 codex + 1 claude, focus: MySQL migration safety, target: PR #42"`
 - `Skill review-anvil "3 rounds, max_rounds: 4"` → 3 requested rounds, then at most 1 adaptive round if the continuation policy allows it.
-- `Skill review-anvil "1 round, only: security, target: src/auth/"`
+- `Skill review-anvil "1 round, only: security, target: src/Auth/"`
 - `Skill review-anvil "fix only critical"` → severity gate raised to `critical`; everything else surfaces as suggestions.
 - `Skill review-anvil "target: PR #42, adversarial: auto"` → normal review first, then adversarial review only if the synthesized findings/fix plans need a validity or proportionality challenge.
+- `Skill review-anvil "only: PHP 5.3 syntax and MySQL 5.7/8.0 compatibility, target: src/"` → compatibility-focused review across the complete legacy matrix.
 
 ## Default Mix Policy
 
@@ -587,8 +634,8 @@ After the final round, emit the **Final Report** (Output Format). If `report_pat
 
    ```json
    [
-     {"path": "src/auth.ts", "line": 50, "side": "RIGHT", "severity": "high", "body": "The handler creates a session before it checks the state token, so an invalid token can still create a session.\n\nSuggestions:\n- Check the token first.\n- Reject invalid tokens without creating a session.\n- Add the missing-token test.\n\n<!-- review-anvil: id=RAV-RUN3-R2-F001 severity=high area=auth -->"},
-     {"path": "src/db.ts", "start_line": 100, "line": 110, "side": "RIGHT", "start_side": "RIGHT", "severity": "medium", "body": "The retry block counts the attempt as successful before `insert_event` returns, so a timeout can record a write that never happened.\n\nSuggestions:\n- Increment `attempts_succeeded` only after the write returns.\n- Keep timed-out attempts retryable.\n- Add the timeout test.\n\n<!-- review-anvil: id=RAV-RUN3-R2-F002 severity=medium area=db -->", "suggestion": "result = insert_event(payload)\nattempts_succeeded += 1\nreturn result"}
+     {"path": "src/Auth.php", "line": 50, "side": "RIGHT", "severity": "high", "body": "The handler creates a session before it checks the state token, so an invalid token can still create a session.\n\nSuggestions:\n- Check the token first.\n- Reject invalid tokens without creating a session.\n- Add the missing-token test.\n\n<!-- review-anvil: id=RAV-RUN3-R2-F001 severity=high area=auth -->"},
+     {"path": "src/EventRepository.php", "start_line": 100, "line": 110, "side": "RIGHT", "start_side": "RIGHT", "severity": "medium", "body": "The retry block counts the attempt as successful before `insertEvent` returns, so a timeout can record a write that never happened.\n\nSuggestions:\n- Increment `$attemptsSucceeded` only after the write returns.\n- Keep timed-out attempts retryable.\n- Add the timeout test on MySQL 5.7 and 8.0.\n\n<!-- review-anvil: id=RAV-RUN3-R2-F002 severity=medium area=db -->", "suggestion": "$result = $this->insertEvent($payload);\n$this->attemptsSucceeded++;\nreturn $result;"}
    ]
    ```
 
@@ -717,8 +764,8 @@ Two issues showed up in session validation and write accounting. One lower-prior
 
 | Severity | Location | Issue | Suggested change |
 |---|---|---|---|
-| High | `src/auth.ts:42` | The refresh handler creates a session before it validates the token. | Validate the token before creating the session. <!-- review-anvil-report: id=RAV-RUN3-R2-F001 severity=high area=auth path=src%2Fauth.ts start_line=- line=42 disposition=active --> |
-| Medium | `src/db.ts:100-110` | Timed-out writes are counted as successful. | Count a write only after it returns successfully. <!-- review-anvil-report: id=RAV-RUN3-R2-F002 severity=medium area=db path=src%2Fdb.ts start_line=100 line=110 disposition=active --> |
+| High | `src/Auth.php:42` | The refresh handler creates a session before it validates the token. | Validate the token before creating the session. <!-- review-anvil-report: id=RAV-RUN3-R2-F001 severity=high area=auth path=src%2FAuth.php start_line=- line=42 disposition=active --> |
+| Medium | `src/EventRepository.php:100-110` | Timed-out writes are counted as successful. | Count a write only after it returns successfully on MySQL 5.7 and 8.0. <!-- review-anvil-report: id=RAV-RUN3-R2-F002 severity=medium area=db path=src%2FEventRepository.php start_line=100 line=110 disposition=active --> |
 
 </details>
 

@@ -1,6 +1,6 @@
 ---
 name: review-anvil-readonly
-description: Multi-agent code review without any edits or commits — requested rounds of parallel reviewers, synthesis, default-on reproduction of uncertain material findings, and a final report. Use when the user wants a code review of a diff, branch, path, or PR but does NOT want any fixes applied automatically (no edits, no commits, no staging). Activates the `review-anvil` engine in read-only mode.
+description: Read-only multi-agent review for legacy PHP 5.3/5.6 applications on MySQL 5.7/8.0, with no edits, commits, or staging. Use for a diff, branch, path, or PR when the user wants compatibility-aware findings, synthesis, reproduction, and a final report without automatic fixes. Activates `review-anvil` in read-only mode.
 ---
 
 # review-anvil-readonly

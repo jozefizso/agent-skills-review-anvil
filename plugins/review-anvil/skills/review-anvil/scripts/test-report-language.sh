@@ -14,6 +14,7 @@ ADVERSARIAL="$ROOT/references/adversarial-prompt.md"
 STYLE="$ROOT/references/asd-ste100-inspired.md"
 ACTION_LOCK="$ROOT/references/action-lock-audit.md"
 CLARITY="$ROOT/references/clarity-pass-prompt.md"
+FIX_APPLICATION="$ROOT/references/fix-application.md"
 CLARITY_VALIDATOR="$ROOT/scripts/validate-clarity-output.py"
 READONLY="$ROOT/../review-anvil-readonly/SKILL.md"
 IMPROVE_PRESET="$ROOT/../review-anvil-improve-pr/SKILL.md"
@@ -333,7 +334,12 @@ require "$ENGINE" 'derive `request_mode` from severity, surface, and'
 require "$ENGINE" 'The handler creates a session before it checks the state token'
 require "$ENGINE" 'Check the token first'
 require "$ENGINE" 'The retry block counts the attempt as successful'
-require "$ENGINE" 'Increment `attempts_succeeded` only after the write returns'
+require "$ENGINE" 'Increment `$attemptsSucceeded` only after the write returns'
+require "$ENGINE" 'PHP 5.3 and'
+require "$ENGINE" 'MySQL 5.7 and MySQL 8.0'
+require "$REVIEWER" '7" means MySQL 5.7'
+require "$REPRODUCTION" 'on PHP 5.6 does not prove PHP 5.3 parse/behavior compatibility.'
+require "$FIX_APPLICATION" 'lint every changed PHP file with PHP 5.3 and PHP 5.6'
 require "$ENGINE" 'smallest source-backed request'
 require "$ENGINE" 'No machine metadata or'
 require "$ENGINE" 'Low/nit report rows and disposition rows use suggestion/boundary mode.'

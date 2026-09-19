@@ -51,6 +51,8 @@ INPUTS
   reviewer evidence, suggested fix path, and why reproduction is required>
 - RELEVANT RUN CONTEXT: <commit_mode, min_fix_severity, verify_cmd, report mode>
 - PROOF RUNNER: <configured trusted absolute path | unavailable>
+- TECHNOLOGY BASELINE: <PHP 5.3 and PHP 5.6; Oracle MySQL 5.7 and 8.0;
+  repository evidence for version-specific paths and available matrix targets>
 - MODE=VERDICT ONLY: <manifest.json, result.env, execution.json, bounded
   stdout/stderr, capability output, and retained proof-bundle path>
 
@@ -72,6 +74,15 @@ For each candidate:
 - If the finding is real but narrower or less severe than stated, keep it but
   return the narrower wording or severity.
 - If the evidence is insufficient, use `unclear`; do not guess.
+- A compatibility claim is confirmed only for the exact PHP and MySQL targets
+  covered by decisive static evidence or successful isolated execution. A run
+  on PHP 5.6 does not prove PHP 5.3 parse/behavior compatibility. A run on MySQL
+  8.0 does not prove MySQL 5.7 compatibility, or the reverse. If a required
+  target is unavailable, return `unclear` and name it.
+- For PHP syntax findings, prefer a parser/linter from the exact target runtime.
+  For database findings, exercise the real query or migration through the
+  repository's configured driver against the exact server version; a SQL
+  parser, SQLite, or MariaDB is not equivalent evidence.
 
 Rules:
 - A plausible reviewer claim is not confirmation. Cite the code, configuration,
@@ -116,13 +127,16 @@ Rules:
 In AUTHOR mode, emit each text source file in a readable fenced block:
 
 ```proof-file RAV-RUN3-R2-F001-probe-1
-from pkg import parse_limit
+<?php
+require_once $argv[1] . '/src/limit.php';
 
-for value in (0, 1, -1):
-    try:
-        print(value, "returned", parse_limit(value))
-    except Exception as error:
-        print(value, "raised", type(error).__name__)
+foreach (array(0, 1, -1) as $value) {
+    try {
+        echo $value . ' returned ' . parse_limit($value) . PHP_EOL;
+    } catch (Exception $error) {
+        echo $value . ' raised ' . get_class($error) . PHP_EOL;
+    }
+}
 ```
 
 Then end with one fenced `proofs` block containing strict JSON. Every
@@ -139,11 +153,11 @@ written as the ordinary file named by `path`.
     "static_evidence": "The public parser passes the value directly to parse_limit.",
     "files": [
       {
-        "path": "probe.py",
+        "path": "probe.php",
         "source_block": "RAV-RUN3-R2-F001-probe-1"
       }
     ],
-    "argv": ["python3", "{proof}/probe.py"],
+    "argv": ["php", "{proof}/probe.php", "{source}"],
     "working_directory": "source",
     "confirmed_when": "The zero case returns while positive and negative controls distinguish normal validation.",
     "refuted_when": "The zero case raises the documented validation error while the positive control returns.",
