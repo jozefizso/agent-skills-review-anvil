@@ -148,6 +148,22 @@ case "$1 $2" in
     printf 'https://example.invalid/comment/123\n'
     ;;
   "api graphql")
+    for arg in "$@"; do
+      if [[ "$arg" == query=mutation*resolveReviewThread* ]]; then
+        thread_id=""
+        for value in "$@"; do
+          if [[ "$value" == threadId=* ]]; then
+            thread_id="${value#threadId=}"
+          fi
+        done
+        [[ -n "$thread_id" ]] || { printf 'missing threadId\n' >&2; exit 2; }
+        if [[ -n "${GH_MOCK_RESOLVED_THREADS:-}" ]]; then
+          printf '%s\n' "$thread_id" >>"$GH_MOCK_RESOLVED_THREADS"
+        fi
+        printf '{"data":{"resolveReviewThread":{"thread":{"id":"%s","isResolved":true}}}}\n' "$thread_id"
+        exit 0
+      fi
+    done
     if [[ "${GH_MOCK_GRAPHQL_FAIL:-0}" == "1" ]]; then
       printf 'mock GraphQL failure\n' >&2
       exit 1
@@ -389,6 +405,305 @@ JSON
     grep -Fq 'id=RAV-RUN5-R1-F001' "$output"
     grep -Fq '[open] src/input.ts:13 — [high] input-files — `*.json` files bypass validation' "$output"
     grep -Fq 'id=RAV-RUN5-R1-F002' "$output"
+}
+
+test_history_includes_author_replies_for_anvil_threads() {
+    local tmp bin fixture output
+    tmp="$(mktemp -d)"
+    trap "rm -rf '$tmp'" RETURN
+    bin="$tmp/bin"
+    mkdir "$bin"
+    install_fake_gh "$bin"
+    fixture="$tmp/graphql.json"
+    cat >"$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{
+  "author":{"login":"pr-author"},
+  "reviewThreads":{"nodes":[
+    {"id":"PRRT_anvil","isResolved":false,"isOutdated":true,"path":"src/auth.ts","line":12,"comments":{"nodes":[
+      {"author":{"login":"reviewer"},"body":"Refresh accepts missing state.\n\n<!-- review-anvil: id=RAV-RUN5-R1-F001 severity=medium area=auth -->","url":"https://example.invalid/root"},
+      {"author":{"login":"pr-author"},"body":"The caller rejects missing state before this helper runs.","url":"https://example.invalid/author-reply"},
+      {"author":{"login":"other-reviewer"},"body":"I agree with the original finding.","url":"https://example.invalid/other-reply"}
+    ]}}
+  ],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "reviews":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+}}}}
+JSON
+    output="$tmp/history.txt"
+
+    GH_MOCK_GRAPHQL_RESPONSE="$fixture" PATH="$bin:$PATH" \
+      "$HELPER" history github.com acme widgets 42 >"$output"
+
+    grep -Fq '[open,outdated] src/auth.ts:12' "$output"
+    grep -Fq 'thread=PRRT_anvil; anvil=true' "$output"
+    grep -Fq 'The caller rejects missing state before this helper runs.' "$output"
+    grep -Fq 'https://example.invalid/author-reply' "$output"
+    ! grep -Fq 'I agree with the original finding.' "$output"
+}
+
+test_post_resolves_author_explained_anvil_thread() {
+    local tmp bin fixture report resolved
+    tmp="$(mktemp -d)"
+    trap "rm -rf '$tmp'" RETURN
+    bin="$tmp/bin"
+    mkdir "$bin"
+    install_fake_gh "$bin"
+    fixture="$tmp/graphql.json"
+    cat >"$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{
+  "author":{"login":"pr-author"},"headRefOid":"reviewed-sha",
+  "reviewThreads":{"nodes":[
+    {"id":"PRRT_anvil","isResolved":false,"isOutdated":true,"path":"src/auth.ts","line":12,"comments":{"nodes":[
+      {"author":{"login":"reviewer"},"body":"Refresh accepts missing state.\n\n<!-- review-anvil: id=RAV-RUN5-R1-F001 severity=medium area=auth -->","url":"https://example.invalid/root"},
+      {"author":{"login":"pr-author"},"body":"The caller rejects missing state before this helper runs.","url":"https://example.invalid/author-reply"}
+    ]}}
+  ],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "reviews":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+}}}}
+JSON
+    report="$tmp/report.md"
+    resolved="$tmp/resolved.txt"
+    cat >"$report" <<'REPORT'
+The earlier authentication concern does not apply because the caller rejects the input first.
+
+_Reviewed with [review-anvil](https://github.com/mrshu/agent-skills/#review-anvil)._
+REPORT
+    cat >"$report.resolutions.json" <<'JSON'
+{
+  "head_sha": "reviewed-sha",
+  "threads": [
+    {
+      "thread_id": "PRRT_anvil",
+      "finding_id": "RAV-RUN5-R1-F001",
+      "disposition": "author-explanation-accepted",
+      "reason": "The current caller rejects missing state before this helper runs."
+    }
+  ]
+}
+JSON
+
+    GH_MOCK_GRAPHQL_RESPONSE="$fixture" \
+    GH_MOCK_RESOLVED_THREADS="$resolved" \
+    GH_MOCK_COMMENT_BODY="$tmp/comment.md" \
+    PATH="$bin:$PATH" \
+      "$HELPER" post github.com acme widgets 42 marker-123 "$report" >/dev/null
+
+    [[ "$(cat "$resolved")" == "PRRT_anvil" ]]
+    assert_file_missing "$report.resolutions.json"
+}
+
+test_resolve_refuses_changed_pr_head() {
+    local tmp bin fixture artifact resolved
+    tmp="$(mktemp -d)"
+    trap "rm -rf '$tmp'" RETURN
+    bin="$tmp/bin"
+    mkdir "$bin"
+    install_fake_gh "$bin"
+    fixture="$tmp/graphql.json"
+    cat >"$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{
+  "author":{"login":"pr-author"},"headRefOid":"new-head-sha",
+  "reviewThreads":{"nodes":[
+    {"id":"PRRT_anvil","isResolved":false,"isOutdated":true,"path":"src/auth.ts","line":12,"comments":{"nodes":[
+      {"author":{"login":"reviewer"},"body":"Refresh accepts missing state.\n\n<!-- review-anvil: id=RAV-RUN5-R1-F001 severity=medium area=auth -->","url":"https://example.invalid/root"},
+      {"author":{"login":"pr-author"},"body":"The caller rejects missing state before this helper runs.","url":"https://example.invalid/author-reply"}
+    ]}}
+  ],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "reviews":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+}}}}
+JSON
+    artifact="$tmp/resolutions.json"
+    resolved="$tmp/resolved.txt"
+    cat >"$artifact" <<'JSON'
+{
+  "head_sha": "reviewed-sha",
+  "threads": [
+    {
+      "thread_id": "PRRT_anvil",
+      "finding_id": "RAV-RUN5-R1-F001",
+      "disposition": "author-explanation-accepted",
+      "reason": "The explanation matched the reviewed snapshot."
+    }
+  ]
+}
+JSON
+
+    if GH_MOCK_GRAPHQL_RESPONSE="$fixture" \
+       GH_MOCK_RESOLVED_THREADS="$resolved" \
+       PATH="$bin:$PATH" \
+         "$HELPER" resolve github.com acme widgets 42 "$artifact" \
+         >"$tmp/stdout" 2>"$tmp/stderr"; then
+        fail "resolve must reject a resolution artifact from an older PR head"
+    fi
+
+    [[ ! -e "$resolved" ]]
+    grep -Fq 'PR head changed since resolution synthesis' "$tmp/stderr"
+}
+
+test_post_refuses_to_resolve_non_anvil_thread() {
+    local tmp bin fixture report resolved
+    tmp="$(mktemp -d)"
+    trap "rm -rf '$tmp'" RETURN
+    bin="$tmp/bin"
+    mkdir "$bin"
+    install_fake_gh "$bin"
+    fixture="$tmp/graphql.json"
+    cat >"$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{
+  "author":{"login":"pr-author"},"headRefOid":"reviewed-sha",
+  "reviewThreads":{"nodes":[
+    {"id":"PRRT_human","isResolved":false,"isOutdated":true,"path":"src/auth.ts","line":12,"comments":{"nodes":[
+      {"author":{"login":"human-reviewer"},"body":"Refresh accepts missing state.","url":"https://example.invalid/human-root"},
+      {"author":{"login":"pr-author"},"body":"The caller rejects missing state first.","url":"https://example.invalid/author-reply"}
+    ]}}
+  ],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "reviews":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+}}}}
+JSON
+    report="$tmp/report.md"
+    resolved="$tmp/resolved.txt"
+    printf 'No current findings.\n' >"$report"
+    cat >"$report.resolutions.json" <<'JSON'
+{
+  "head_sha": "reviewed-sha",
+  "threads": [
+    {
+      "thread_id": "PRRT_human",
+      "finding_id": "RAV-RUN5-R1-F001",
+      "disposition": "author-explanation-accepted",
+      "reason": "The author explanation is valid."
+    }
+  ]
+}
+JSON
+
+    GH_MOCK_GRAPHQL_RESPONSE="$fixture" \
+    GH_MOCK_RESOLVED_THREADS="$resolved" \
+    GH_MOCK_COMMENT_BODY="$tmp/comment.md" \
+    PATH="$bin:$PATH" \
+      "$HELPER" post github.com acme widgets 42 marker-123 "$report" \
+      >/dev/null 2>"$tmp/stderr"
+
+    [[ ! -e "$resolved" ]]
+    [[ -f "$report.resolutions.json" ]]
+    grep -Fq 'refusing to resolve non-review-anvil thread PRRT_human' "$tmp/stderr"
+    grep -Fq 'retained' "$tmp/stderr"
+}
+
+test_accepted_author_explanation_prevents_recurrence() {
+    local tmp bin fixture report
+    tmp="$(mktemp -d)"
+    trap "rm -rf '$tmp'" RETURN
+    bin="$tmp/bin"
+    mkdir "$bin"
+    install_fake_gh "$bin"
+    fixture="$tmp/graphql.json"
+    cat >"$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{
+  "author":{"login":"pr-author"},
+  "reviewThreads":{"nodes":[
+    {"id":"PRRT_anvil","isResolved":false,"isOutdated":true,"path":"src/auth.ts","line":12,"comments":{"nodes":[
+      {"author":{"login":"reviewer"},"body":"Refresh accepts missing state.\n\n<!-- review-anvil: id=RAV-RUN5-R1-F001 severity=medium area=auth -->","url":"https://example.invalid/root"},
+      {"author":{"login":"pr-author"},"body":"The caller rejects missing state before this helper runs.","url":"https://example.invalid/author-reply"}
+    ]}}
+  ],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "reviews":{"nodes":[
+    {"state":"COMMENTED","body":"<!-- review-anvil-marker: accepted -->\nThe earlier concern does not apply.\n\n<details>\n<summary>Earlier feedback</summary>\n\n- **author-explanation-accepted** — [medium] auth — Refresh accepts missing state. https://example.invalid/author-reply (`RAV-RUN5-R1-F001`)\n\n</details>\n\n_Reviewed with [review-anvil](https://github.com/mrshu/agent-skills/#review-anvil)._","url":"https://example.invalid/accepted-review"}
+  ],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+}}}}
+JSON
+    GH_MOCK_GRAPHQL_RESPONSE="$fixture" PATH="$bin:$PATH" \
+      "$HELPER" history github.com acme widgets 42 >"$tmp/history.txt"
+    grep -Fq '[author-explanation-accepted,outdated] src/auth.ts:12' "$tmp/history.txt"
+    grep -Fq 'thread=PRRT_anvil; anvil=true' "$tmp/history.txt"
+    report="$tmp/report.md"
+    cat >"$report" <<'REPORT'
+# review-anvil report
+
+## Findings
+- **RAV-RUN5-R1-F001 [medium] auth** `src/auth.ts:12` — Refresh accepts missing state.
+REPORT
+    cat >"$report.inline.json" <<'JSON'
+[
+  {
+    "path": "src/auth.ts",
+    "line": 12,
+    "side": "RIGHT",
+    "severity": "medium",
+    "body": "Refresh accepts missing state.\n\n<!-- review-anvil: id=RAV-RUN5-R1-F001 severity=medium area=auth -->"
+  }
+]
+JSON
+
+    GH_MOCK_GRAPHQL_RESPONSE="$fixture" \
+    GH_MOCK_REVIEW_PAYLOAD="$tmp/review-payload.json" \
+    GH_MOCK_COMMENT_BODY="$tmp/comment.md" \
+    PATH="$bin:$PATH" \
+      "$HELPER" post github.com acme widgets 42 marker-123 "$report" >/dev/null
+
+    ! grep -Fq 'Refresh accepts missing state' "$tmp/comment.md"
+    [[ ! -e "$tmp/review-payload.json" ]]
+}
+
+test_reintroduced_finding_outranks_accepted_author_explanation() {
+    local tmp bin fixture report
+    tmp="$(mktemp -d)"
+    trap "rm -rf '$tmp'" RETURN
+    bin="$tmp/bin"
+    mkdir "$bin"
+    install_fake_gh "$bin"
+    fixture="$tmp/graphql.json"
+    cat >"$fixture" <<'JSON'
+{"data":{"repository":{"pullRequest":{
+  "author":{"login":"pr-author"},
+  "reviewThreads":{"nodes":[
+    {"id":"PRRT_anvil","isResolved":false,"isOutdated":true,"path":"src/auth.ts","line":12,"comments":{"nodes":[
+      {"author":{"login":"reviewer"},"body":"Refresh accepts missing state.\n\n<!-- review-anvil: id=RAV-RUN5-R1-F001 severity=medium area=auth -->","url":"https://example.invalid/root"},
+      {"author":{"login":"pr-author"},"body":"The caller rejects missing state before this helper runs.","url":"https://example.invalid/author-reply"}
+    ]}}
+  ],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "reviews":{"nodes":[
+    {"state":"COMMENTED","body":"<!-- review-anvil-marker: accepted -->\nThe earlier concern does not apply.\n\n<details>\n<summary>Earlier feedback</summary>\n\n- **author-explanation-accepted** — [medium] auth — Refresh accepts missing state. https://example.invalid/author-reply (`RAV-RUN5-R1-F001`)\n\n</details>\n\n_Reviewed with [review-anvil](https://github.com/mrshu/agent-skills/#review-anvil)._","url":"https://example.invalid/accepted-review"}
+  ],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+  "comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+}}}}
+JSON
+    report="$tmp/report.md"
+    cat >"$report" <<'REPORT'
+# review-anvil report
+
+## Findings
+- **RAV-RUN5-R1-F001 [medium] auth** `src/auth.ts:12` — Refresh accepts missing state after the caller changed.
+<!-- review-anvil: prior_feedback=reintroduced -->
+REPORT
+    cat >"$report.inline.json" <<'JSON'
+[
+  {
+    "path": "src/auth.ts",
+    "line": 12,
+    "side": "RIGHT",
+    "severity": "medium",
+    "prior_feedback": "reintroduced",
+    "body": "Refresh accepts missing state after the caller changed.\n\n<!-- review-anvil: id=RAV-RUN5-R1-F001 severity=medium area=auth -->"
+  }
+]
+JSON
+
+    GH_MOCK_GRAPHQL_RESPONSE="$fixture" \
+    GH_MOCK_REVIEW_PAYLOAD="$tmp/review-payload.json" \
+    GH_MOCK_COMMENT_BODY="$tmp/comment.md" \
+    PATH="$bin:$PATH" \
+      "$HELPER" post github.com acme widgets 42 marker-123 "$report" >/dev/null
+
+    jq -e '
+      (.comments | length) == 1
+      and (.comments[0].body | contains("prior_feedback=reintroduced"))
+      and (.body | contains("Refresh accepts missing state after the caller changed."))
+    ' "$tmp/review-payload.json" >/dev/null
 }
 
 test_hidden_identity_outranks_rewritten_prose() {
@@ -2185,6 +2500,12 @@ test_engine_template_footer_uses_anchor() {
 
 main() {
     command -v jq >/dev/null 2>&1 || fail "jq is required"
+    test_history_includes_author_replies_for_anvil_threads
+    test_post_resolves_author_explained_anvil_thread
+    test_resolve_refuses_changed_pr_head
+    test_post_refuses_to_resolve_non_anvil_thread
+    test_accepted_author_explanation_prevents_recurrence
+    test_reintroduced_finding_outranks_accepted_author_explanation
     test_process_inline
     test_process_inline_infers_id_prefixed_severity
     test_process_inline_preserves_terminal_finding_metadata

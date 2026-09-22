@@ -18,9 +18,13 @@
 #   post-start …            — post the "starting" comment, cc the author;
 #                             prints COMMENT_ID/COMMENT_URL/STARTED_AT.
 #   post-update …           — PATCH-edit the starting comment with the final
-#                             report (suppression applied on success outcome).
+#                             report, then resolve validated review-anvil
+#                             threads (suppression applied on success outcome).
 #   history …               — print all prior PR findings with open/resolved/
-#                             outdated/reported/suppressed status for prompts.
+#                             outdated/reported/suppressed status, author
+#                             replies, and review-anvil thread identity.
+#   resolve …               — validate and resolve requested review-anvil
+#                             threads from a .resolutions.json artifact.
 #   dismissed …             — legacy resolved/suppressed-only history view.
 #   dismiss …               — record a local suppression in the dismissals
 #                             state file ($REVIEW_ANVIL_DISMISSALS).
@@ -89,8 +93,11 @@ report_is_infra_failure() {
 }
 
 cleanup_post_artifacts() {
-    local report_path="$1" dir
+    local report_path="$1" resolution_policy="${2:-remove}" dir
     rm -f "$report_path" "${report_path}.inline.json" "${report_path}.approval.json" "${report_path}.followups.json" "${report_path}.full.md"
+    if [[ "$resolution_policy" != "keep" ]]; then
+        rm -f "${report_path}.resolutions.json"
+    fi
     dir=$(dirname "$report_path")
     if [[ -d "$dir" ]] && ! _dir_has_other_artifacts "$dir"; then
         rm -f "$dir/.gitignore"
@@ -127,11 +134,33 @@ _submit_review() {
     printf '%s' "$response" | jq -r '.html_url // empty' 2>/dev/null || true
 }
 
+# Resolve only live threads whose root comment carries review-anvil's terminal
+# finding metadata. A failed resolution must not hide a successfully delivered
+# review; retain the resolution artifact so the next run or a human can retry.
+resolve_requested_anvil_threads() {
+    local host="$1" owner="$2" repo="$3" n="$4" report_path="$5"
+    local resolutions="${report_path}.resolutions.json"
+    [[ -f "$resolutions" ]] || return 0
+    export GH_HOST="$host"
+    _review_history_py resolve "$owner" "$repo" "$n" "$resolutions"
+}
+
+finalize_post_artifacts() {
+    local host="$1" owner="$2" repo="$3" n="$4" report_path="$5"
+    if resolve_requested_anvil_threads "$host" "$owner" "$repo" "$n" "$report_path"; then
+        cleanup_post_artifacts "$report_path"
+    else
+        printf 'warning: review posted, but one or more review-anvil threads could not be resolved; retained %s for retry\n' \
+            "${report_path}.resolutions.json" >&2
+        cleanup_post_artifacts "$report_path" keep
+    fi
+}
+
 # Print the post result and clean up artifacts. $1 = event, $2 = url (may be
 # empty). Uses the caller's report_path local.
 _emit_post_result() {
     local event="$1" url="$2"
-    cleanup_post_artifacts "$report_path"
+    finalize_post_artifacts "$host" "$owner" "$repo" "$n" "$report_path"
     if [[ -n "$url" ]]; then
         printf '%s\n' "$url"
     elif [[ "$event" == "APPROVE" ]]; then
@@ -477,9 +506,11 @@ query($owner:String!,$repo:String!,$number:Int!,$threadCursor:String,$reviewCurs
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
       author{ login }
+      headRefOid
       reviewThreads(first:100, after:$threadCursor){
         pageInfo{ hasNextPage endCursor }
         nodes{
+          id
           isResolved
           isOutdated
           resolvedBy{ login }
@@ -523,6 +554,7 @@ def fetch_history():
     threads, reviews, comments = [], [], []
     thread_cursor = review_cursor = comment_cursor = None
     thread_done = review_done = comment_done = False
+    observed_head_sha = None
     while True:
         try:
             payload = json.loads(gh_graphql(thread_cursor, review_cursor, comment_cursor).stdout)
@@ -537,6 +569,13 @@ def fetch_history():
             review_page = pr["reviews"]
             comment_page = pr["comments"]
             pr_author = ((pr.get("author") or {}).get("login") or "")
+            page_head_sha = str(pr.get("headRefOid") or "")
+            if observed_head_sha is None:
+                observed_head_sha = page_head_sha
+            elif page_head_sha != observed_head_sha:
+                raise SystemExit(
+                    "pr-helper: PR head changed while reading review history"
+                )
         except (KeyError, TypeError, json.JSONDecodeError) as exc:
             raise SystemExit(f"pr-helper: malformed PR review history response: {exc}")
 
@@ -566,7 +605,7 @@ def fetch_history():
             if not comment_done and not comment_cursor:
                 raise SystemExit("pr-helper: malformed PR review history response: comments page has no endCursor")
         if thread_done and review_done and comment_done:
-            return pr_author, threads, reviews, comments
+            return pr_author, observed_head_sha or "", threads, reviews, comments
 
 def norm(text: str) -> str:
     text = re.sub(r"https?://\S+", " ", text or "")
@@ -637,8 +676,12 @@ HUMAN_REPORT_TABLE_RE = re.compile(
     re.I,
 )
 EARLIER_FEEDBACK_RE = re.compile(
-    rf"^\s*[-*]\s+\*\*(?P<status>open|still-present|fixed|stale|reported|author-resolved)\*\*"
-    rf"\s*[-—:]+\s*(?P<text>.+?)(?:\s+\(`(?P<finding_id>{FINDING_ID_PATTERN})`\))?\s*$",
+    r"^\s*[-*]\s+\*\*(?P<status>open|still-present|fixed|stale|reported|author-resolved|author-explanation-accepted)\*\*"
+    r"\s*[-—:]+\s*(?P<text>.+?)\s*$",
+    re.I,
+)
+EARLIER_FEEDBACK_ID_RE = re.compile(
+    rf"\s+\(`(?P<finding_id>{FINDING_ID_PATTERN})`\)\s*$",
     re.I,
 )
 IDENTITY_METADATA_RE = re.compile(
@@ -791,12 +834,16 @@ def earlier_feedback_finding(line):
     if not match:
         return None
     text = match.group("text").strip()
+    id_match = EARLIER_FEEDBACK_ID_RE.search(text)
+    finding_id = id_match.group("finding_id") if id_match else None
+    if id_match:
+        text = text[:id_match.start()].rstrip()
     url_match = re.search(r"\s+(https?://\S+)$", text)
     source_url = url_match.group(1) if url_match else None
     if url_match:
         text = text[:url_match.start()].rstrip()
     return {
-        "id": match.group("finding_id"),
+        "id": finding_id,
         "status": match.group("status").lower(),
         "finding": text,
         "url": source_url,
@@ -985,7 +1032,133 @@ def same_finding(cand, previous, require_path):
         return True
     return difflib.SequenceMatcher(None, cs, ps).ratio() >= 0.9
 
-pr_author, threads, reviews, issue_comments = fetch_history()
+pr_author, live_head_sha, threads, reviews, issue_comments = fetch_history()
+
+if mode == "resolve":
+    artifact = Path(sys.argv[5])
+    try:
+        payload = json.loads(artifact.read_text())
+    except Exception as exc:
+        raise SystemExit(f"pr-helper: invalid resolution artifact {artifact}: {exc}")
+    if not isinstance(payload, dict) or set(payload) != {"head_sha", "threads"}:
+        raise SystemExit(
+            f"pr-helper: {artifact} must be an object with only head_sha and threads"
+        )
+    reviewed_head_sha = str(payload.get("head_sha") or "")
+    requests = payload.get("threads")
+    if not reviewed_head_sha or not isinstance(requests, list):
+        raise SystemExit(
+            f"pr-helper: {artifact} requires a non-empty head_sha and a threads array"
+        )
+    if requests and reviewed_head_sha != live_head_sha:
+        raise SystemExit(
+            "pr-helper: PR head changed since resolution synthesis "
+            f"({reviewed_head_sha or 'missing'} -> {live_head_sha or 'missing'}); "
+            "refusing to resolve stale review-anvil threads"
+        )
+    allowed_dispositions = {"fixed", "stale", "author-explanation-accepted"}
+    live_threads = {str(thread.get("id") or ""): thread for thread in threads}
+    validated = []
+    seen_thread_ids = set()
+    for index, request in enumerate(requests):
+        if not isinstance(request, dict):
+            raise SystemExit(
+                f"pr-helper: resolution item {index + 1} is not an object"
+            )
+        unknown = set(request) - {"thread_id", "finding_id", "disposition", "reason"}
+        if unknown:
+            raise SystemExit(
+                f"pr-helper: resolution item {index + 1} has unsupported fields: "
+                + ", ".join(sorted(unknown))
+            )
+        thread_id = str(request.get("thread_id") or "")
+        finding_id = str(request.get("finding_id") or "")
+        disposition = str(request.get("disposition") or "")
+        reason = str(request.get("reason") or "").strip()
+        if not thread_id or not finding_id or disposition not in allowed_dispositions or not reason:
+            raise SystemExit(
+                f"pr-helper: resolution item {index + 1} requires thread_id, "
+                "finding_id, an allowed disposition, and a reason"
+            )
+        if thread_id in seen_thread_ids:
+            raise SystemExit(
+                f"pr-helper: resolution artifact repeats thread {thread_id}"
+            )
+        seen_thread_ids.add(thread_id)
+        thread = live_threads.get(thread_id)
+        if thread is None:
+            raise SystemExit(
+                f"pr-helper: resolution thread {thread_id} is not part of this PR"
+            )
+        comments = (thread.get("comments") or {}).get("nodes") or []
+        root_body = comments[0].get("body") if comments else ""
+        metadata = terminal_finding_metadata(root_body or "")
+        if metadata is None:
+            raise SystemExit(
+                f"pr-helper: refusing to resolve non-review-anvil thread {thread_id}"
+            )
+        if metadata.group("id").casefold() != finding_id.casefold():
+            raise SystemExit(
+                f"pr-helper: resolution item {thread_id} names {finding_id}, "
+                f"but the live review-anvil thread names {metadata.group('id')}"
+            )
+        if disposition == "author-explanation-accepted":
+            has_author_reply = any(
+                pr_author
+                and ((comment.get("author") or {}).get("login") or "").casefold()
+                == pr_author.casefold()
+                for comment in comments[1:]
+            )
+            if not has_author_reply:
+                raise SystemExit(
+                    f"pr-helper: thread {thread_id} has no PR-author reply to accept"
+                )
+        if not thread.get("isResolved"):
+            validated.append(thread_id)
+
+    mutation = (
+        "mutation($threadId:ID!){"
+        "resolveReviewThread(input:{threadId:$threadId}){"
+        "thread{id isResolved}}}"
+    )
+    for thread_id in validated:
+        args = [
+            "gh", "api", "graphql",
+            "-f", f"query={mutation}",
+            "-f", f"threadId={thread_id}",
+        ]
+        cp = None
+        for attempt in (1, 2):
+            cp = subprocess.run(
+                args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            if cp.returncode == 0:
+                break
+            if attempt == 1:
+                time.sleep(2)
+        if cp is None or cp.returncode != 0:
+            detail = (cp.stderr or cp.stdout).strip() if cp else "no response"
+            raise SystemExit(
+                f"pr-helper: could not resolve review-anvil thread {thread_id} "
+                f"after retry: {detail}"
+            )
+        try:
+            resolved = json.loads(cp.stdout)["data"]["resolveReviewThread"]["thread"]
+            if resolved.get("id") != thread_id or not resolved.get("isResolved"):
+                raise KeyError("thread result")
+        except (KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise SystemExit(
+                f"pr-helper: malformed resolveReviewThread response for "
+                f"{thread_id}: {exc}"
+            )
+    if validated:
+        print(
+            f"pr-helper: resolved {len(validated)} obsolete review-anvil "
+            "thread(s)",
+            file=sys.stderr,
+        )
+    raise SystemExit(0)
+
 
 if mode == "next-run":
     legacy_heading = re.compile(
@@ -1032,8 +1205,9 @@ for t in threads:
     comments = (t.get("comments") or {}).get("nodes") or []
     if not comments:
         continue
-    # Root comment only: it carries the finding; replies are discussion and
-    # would inflate the false-positive surface of fuzzy matching.
+    # The root carries the finding. Replies do not participate in fuzzy
+    # matching, but PR-author replies are preserved as review context so a
+    # valid explanation can close the finding instead of being re-raised.
     body = comments[0].get("body") or ""
     sig = signature(body)
     if sig:
@@ -1050,12 +1224,25 @@ for t in threads:
             if thread_start and thread_end and thread_start != thread_end
             else thread_end
         )
+        author_replies = [
+            {
+                "body": comment.get("body") or "",
+                "url": comment.get("url") or "",
+            }
+            for comment in comments[1:]
+            if pr_author
+            and ((comment.get("author") or {}).get("login") or "").casefold()
+            == pr_author.casefold()
+        ]
         history.append({"path": t.get("path") or "", "line": thread_line,
                         "sig": sig, "summary": summary(body),
                         "source": comments[0].get("url") or "review-thread",
                         "status": status, "severity": severity_from_body(body),
                         "prior_feedback": "reintroduced" if REINTRODUCED_MARKER in body else None,
                         "outdated": bool(t.get("isOutdated")),
+                        "thread_id": t.get("id") or None,
+                        "review_anvil": terminal_finding_metadata(body) is not None,
+                        "author_replies": author_replies,
                         **identity_from_body(body)})
 
 def report_findings(node):
@@ -1134,9 +1321,7 @@ def report_findings(node):
                     {
                         "path": "",
                         "line": None,
-                        "sig": norm(
-                            f'{earlier_item["status"]} {earlier_item["finding"]}'
-                        ),
+                        "sig": norm(earlier_item["finding"]),
                         "summary": (
                             f'[{earlier_item["status"]}] history — '
                             f'{earlier_item["finding"]}'
@@ -1248,7 +1433,11 @@ if sp and sp.exists():
 def history_rank(item):
     if item.get("prior_feedback") == "reintroduced":
         return 3
-    return {"suppressed": 2, "author-resolved": 1}.get(item["status"], 0)
+    return {
+        "suppressed": 2,
+        "author-resolved": 1,
+        "author-explanation-accepted": 1,
+    }.get(item["status"], 0)
 
 def same_history_item(item, current):
     if not same_finding(item, current, require_path=False):
@@ -1283,7 +1472,13 @@ history = coalesce_history(history)
 
 if mode in {"history", "list"}:
     selected = history if mode == "history" else [
-        item for item in history if item["status"] in {"resolved", "author-resolved", "suppressed"}
+        item for item in history
+        if item["status"] in {
+            "resolved",
+            "author-resolved",
+            "author-explanation-accepted",
+            "suppressed",
+        }
     ]
     if not selected:
         print("None.")
@@ -1295,6 +1490,19 @@ if mode in {"history", "list"}:
                 loc = "(no file anchor)"
             flags = d["status"] + (",reintroduced" if d.get("prior_feedback") == "reintroduced" else "") + (",outdated" if d.get("outdated") else "")
             metadata = [f'source={d["source"]}', *rendered_identity_fields(d)]
+            if d.get("review_anvil") and d.get("thread_id"):
+                metadata.extend(
+                    [f'thread={d["thread_id"]}', "anvil=true"]
+                )
+            if d.get("author_replies"):
+                metadata.append(
+                    "author-replies="
+                    + json.dumps(
+                        d["author_replies"],
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                )
             print(f'- [{flags}] {loc} — {d["summary"]} ({"; ".join(metadata)})')
     raise SystemExit(0)
 
@@ -1323,7 +1531,12 @@ categorically_removed = 0
 explicit_suppressions = []
 
 def does_not_reraise(item):
-    return item["status"] in {"suppressed", "author-resolved", "outside"}
+    return item["status"] in {
+        "suppressed",
+        "author-resolved",
+        "author-explanation-accepted",
+        "outside",
+    }
 
 def location_range_from_block(block):
     for line in block:
@@ -1469,11 +1682,15 @@ if inline_items is not None:
         )
         hit = matching_history(cand, require_path=True)
         if hit:
-            bypass_author_resolved = (
-                hit["status"] == "author-resolved" and reintroduced
+            bypass_closed_feedback = (
+                hit["status"] in {
+                    "author-resolved",
+                    "author-explanation-accepted",
+                }
+                and reintroduced
             )
-            matched_history.append((hit, cand.get("severity"), bypass_author_resolved))
-            if does_not_reraise(hit) and not bypass_author_resolved:
+            matched_history.append((hit, cand.get("severity"), bypass_closed_feedback))
+            if does_not_reraise(hit) and not bypass_closed_feedback:
                 categorically_removed += 1
                 if hit["status"] == "suppressed":
                     explicit_suppressions.append({"path": cand["path"],
@@ -1562,11 +1779,15 @@ if report.exists():
             report_reintroduced |= reintroduced and marked_block != block
             hit = matching_history(cand, require_path=False)
             if hit:
-                bypass_author_resolved = (
-                    hit["status"] == "author-resolved" and reintroduced
+                bypass_closed_feedback = (
+                    hit["status"] in {
+                        "author-resolved",
+                        "author-explanation-accepted",
+                    }
+                    and reintroduced
                 )
-                matched_history.append((hit, severity_from_body("\n".join(block)), bypass_author_resolved))
-                if does_not_reraise(hit) and not bypass_author_resolved:
+                matched_history.append((hit, severity_from_body("\n".join(block)), bypass_closed_feedback))
+                if does_not_reraise(hit) and not bypass_closed_feedback:
                     categorically_removed += 1
                     if hit["status"] == "suppressed":
                         explicit_suppressions.append({"path": cand["path"],
@@ -1748,6 +1969,16 @@ cmd_history() {
     fi
     export GH_HOST="$host"
     _review_history_py history "$owner" "$repo" "$n"
+}
+
+cmd_resolve() {
+    local host="${1:-}" owner="${2:-}" repo="${3:-}" n="${4:-}" artifact="${5:-}"
+    for v in host owner repo n artifact; do
+        [[ -n "${!v}" ]] || die "resolve: missing <$v>"
+    done
+    [[ -f "$artifact" ]] || die "resolution artifact not found: $artifact"
+    export GH_HOST="$host"
+    _review_history_py resolve "$owner" "$repo" "$n" "$artifact"
 }
 
 cmd_next_run() {
@@ -2094,7 +2325,7 @@ cmd_post() {
                | head -n1 || true)
     if [[ -n "$existing" ]]; then
         printf 'note: a review with this marker already exists on the PR; not posting again\n' >&2
-        cleanup_post_artifacts "$report_path"
+        finalize_post_artifacts "$host" "$owner" "$repo" "$n" "$report_path"
         printf '%s\n' "$existing"
         return 0
     fi
@@ -2115,7 +2346,7 @@ cmd_post() {
         [[ "$attempt" -eq 1 ]] && sleep 2
     done
 
-    cleanup_post_artifacts "$report_path"
+    finalize_post_artifacts "$host" "$owner" "$repo" "$n" "$report_path"
     if [[ -n "$url" ]]; then
         printf '%s\n' "$url"
     else
@@ -2399,7 +2630,11 @@ cmd_post_update() {
     local url
     url=$(gh api "repos/${owner}/${repo}/issues/comments/${comment_id}" --jq '.html_url' 2>/dev/null || true)
 
-    cleanup_post_artifacts "$report_path"
+    if [[ "$outcome" == "success" ]]; then
+        finalize_post_artifacts "$host" "$owner" "$repo" "$n" "$report_path"
+    else
+        cleanup_post_artifacts "$report_path"
+    fi
     if [[ -n "$url" ]]; then
         printf '%s\n' "$url"
     else
@@ -2415,11 +2650,12 @@ case "${1:-}" in
     post-start)       shift; cmd_post_start "$@" ;;
     post-update)      shift; cmd_post_update "$@" ;;
     history)          shift; cmd_history "$@" ;;
+    resolve)          shift; cmd_resolve "$@" ;;
     dismissed)        shift; cmd_dismissed "$@" ;;
     dismiss)          shift; cmd_dismiss "$@" ;;
     compact-report)   shift; compact_report_for_github "$@" ;;
     process-inline)   shift; process_inline_comments_for_github "$@" ;;
     check-pins)       shift; cmd_check_pins "$@" ;;
-    "")               die "usage: pr-helper.sh {init [<locator>] | next-run <host> <owner> <repo> <n> | post <host> <owner> <repo> <n> <marker> <report_path> | verify-checkout [<locator>] | post-start <host> <owner> <repo> <n> <marker> <author> | post-update <host> <owner> <repo> <n> <comment_id> <marker> <report_path> <author> <success|failure> [<started_at>] | history <host> <owner> <repo> <n> | dismissed <host> <owner> <repo> <n> | dismiss <host> <owner> <repo> <n> <path> <pattern> [<reason>] | compact-report <report_path> [<inline_json>] | process-inline <inline_json> | check-pins <preset> <pins-csv> [<raw-args>]}" ;;
+    "")               die "usage: pr-helper.sh {init [<locator>] | next-run <host> <owner> <repo> <n> | post <host> <owner> <repo> <n> <marker> <report_path> | verify-checkout [<locator>] | post-start <host> <owner> <repo> <n> <marker> <author> | post-update <host> <owner> <repo> <n> <comment_id> <marker> <report_path> <author> <success|failure> [<started_at>] | history <host> <owner> <repo> <n> | resolve <host> <owner> <repo> <n> <resolutions_json> | dismissed <host> <owner> <repo> <n> | dismiss <host> <owner> <repo> <n> <path> <pattern> [<reason>] | compact-report <report_path> [<inline_json>] | process-inline <inline_json> | check-pins <preset> <pins-csv> [<raw-args>]}" ;;
     *)                die "unknown subcommand: $1" ;;
 esac

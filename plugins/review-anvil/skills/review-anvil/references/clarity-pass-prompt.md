@@ -49,7 +49,7 @@ You receive one JSON object named `FROZEN_CLARITY_PACKET`:
   "checks": "exact reproduction result",
   "second_check": "exact adversarial result",
   "earlier_feedback": [
-    {"id": "optional modern or legacy finding ID", "status": "open | still-present | fixed | stale | reported | author-resolved", "text": "frozen status fact", "url": "optional exact URL"}
+    {"id": "optional modern or legacy finding ID", "status": "open | still-present | fixed | stale | reported | author-resolved | author-explanation-accepted", "text": "frozen status fact", "url": "optional exact URL"}
   ],
   "findings": [
     {

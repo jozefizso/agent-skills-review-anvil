@@ -118,6 +118,10 @@ What makes it useful:
   "exactly 3 rounds" or `max_rounds: 3` when you want a hard stop.
 - **PR-native output:** anchored findings become full inline review comments;
   broader findings stay in one focused summary.
+- **Conversation-aware follow-ups:** PR runs read replies from the PR author,
+  validate explanations against the current code, suppress accepted findings,
+  and resolve only obsolete review-anvil threads. Human-authored review threads
+  are never auto-resolved.
 - **PR repair flow:** `review-anvil-improve-pr` can announce a run, commit and
   push verified fixes to a checked-out PR branch, then update the same PR comment
   with the result.
